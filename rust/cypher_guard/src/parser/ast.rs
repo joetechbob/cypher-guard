@@ -9,6 +9,9 @@ pub struct Query {
     pub return_clauses: Vec<ReturnClause>,
     pub unwind_clauses: Vec<UnwindClause>,
     pub call_clauses: Vec<CallClause>,
+    pub delete_clauses: Vec<DeleteClause>,
+    pub remove_clauses: Vec<RemoveClause>,
+    pub set_clauses: Vec<SetClause>,
 }
 
 // RETURN clause (simple)
@@ -325,4 +328,23 @@ pub struct CallClause {
     pub subquery: Option<Query>,           // For CALL { ... } subqueries
     pub procedure: Option<String>,         // For CALL procedure() calls
     pub yield_clause: Option<Vec<String>>, // For YIELD clause
+}
+
+// DELETE clause for removing nodes and relationships
+#[derive(Debug, PartialEq, Clone)]
+pub struct DeleteClause {
+    pub expressions: Vec<String>, // Variables to delete (e.g., "n", "r")
+    pub detach: bool,              // true for DETACH DELETE, false for DELETE
+}
+
+// REMOVE clause for removing properties and labels
+#[derive(Debug, PartialEq, Clone)]
+pub struct RemoveClause {
+    pub items: Vec<RemoveItem>,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum RemoveItem {
+    Property { variable: String, property: String }, // REMOVE n.prop
+    Label { variable: String, label: String },       // REMOVE n:Label
 }

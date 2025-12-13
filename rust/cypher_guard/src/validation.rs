@@ -1007,6 +1007,9 @@ mod tests {
             return_clauses: vec![],
             unwind_clauses: vec![],
             call_clauses: vec![],
+            delete_clauses: vec![],
+            remove_clauses: vec![],
+            set_clauses: vec![],
         };
 
         let elements = extract_query_elements(&query);
@@ -1043,6 +1046,9 @@ mod tests {
             return_clauses: vec![],
             unwind_clauses: vec![],
             call_clauses: vec![],
+            delete_clauses: vec![],
+            remove_clauses: vec![],
+            set_clauses: vec![],
         };
 
         let elements = extract_query_elements(&query);
@@ -1085,6 +1091,9 @@ mod tests {
             }],
             unwind_clauses: vec![],
             call_clauses: vec![],
+            delete_clauses: vec![],
+            remove_clauses: vec![],
+            set_clauses: vec![],
         };
 
         let elements = extract_query_elements(&query);
@@ -1131,6 +1140,9 @@ mod tests {
             return_clauses: vec![],
             unwind_clauses: vec![],
             call_clauses: vec![],
+            delete_clauses: vec![],
+            remove_clauses: vec![],
+            set_clauses: vec![],
         };
 
         let elements = extract_query_elements(&query);
@@ -1163,6 +1175,9 @@ mod tests {
                 variable: "x".to_string(),
             }],
             call_clauses: vec![],
+            delete_clauses: vec![],
+            remove_clauses: vec![],
+            set_clauses: vec![],
         };
         let elements = extract_query_elements(&query);
         assert!(elements.defined_variables.contains("x"));
@@ -1418,6 +1433,9 @@ mod tests {
                 variable: "x".to_string(),
             }],
             call_clauses: vec![],
+            delete_clauses: vec![],
+            remove_clauses: vec![],
+            set_clauses: vec![],
         };
         let elements = QueryElements::new();
         let schema = DbSchema::new();
@@ -1495,6 +1513,9 @@ mod tests {
             return_clauses: vec![],
             unwind_clauses: vec![],
             call_clauses: vec![],
+            delete_clauses: vec![],
+            remove_clauses: vec![],
+            set_clauses: vec![],
         };
 
         let elements = extract_query_elements(&valid_query);
@@ -1544,6 +1565,9 @@ mod tests {
             return_clauses: vec![],
             unwind_clauses: vec![],
             call_clauses: vec![],
+            delete_clauses: vec![],
+            remove_clauses: vec![],
+            set_clauses: vec![],
         };
 
         let elements = extract_query_elements(&invalid_query);

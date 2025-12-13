@@ -30,6 +30,9 @@ pub enum Clause {
     Unwind(UnwindClause),
     Where(WhereClause),
     Call(CallClause),
+    Delete(ast::DeleteClause),
+    Remove(ast::RemoveClause),
+    Set(Vec<ast::SetClause>),
 }
 
 // Parses a comma-separated list of match elements, stopping at clause boundaries
@@ -661,6 +664,9 @@ fn parse_subquery(input: &str) -> IResult<&str, Query> {
         return_clauses: Vec::new(),
         unwind_clauses: Vec::new(),
         call_clauses: Vec::new(),
+        delete_clauses: Vec::new(),
+        remove_clauses: Vec::new(),
+        set_clauses: Vec::new(),
     };
 
     // Collect all clauses by type
@@ -676,6 +682,9 @@ fn parse_subquery(input: &str) -> IResult<&str, Query> {
             Clause::Return(return_clause) => query.return_clauses.push(return_clause.clone()),
             Clause::Unwind(unwind_clause) => query.unwind_clauses.push(unwind_clause.clone()),
             Clause::Call(call_clause) => query.call_clauses.push(call_clause.clone()),
+            Clause::Delete(delete_clause) => query.delete_clauses.push(delete_clause.clone()),
+            Clause::Remove(remove_clause) => query.remove_clauses.push(remove_clause.clone()),
+            Clause::Set(set_clauses) => query.set_clauses.extend(set_clauses.clone()),
             Clause::Query(_) => {
                 // Handle nested queries if needed
                 return Err(nom::Err::Error(nom::error::Error::new(
@@ -1213,6 +1222,73 @@ pub fn unwind_clause(input: &str) -> IResult<&str, UnwindClause> {
     )))
 }
 
+// Parses the DELETE or DETACH DELETE clause (e.g. DELETE n, DETACH DELETE n, r)
+pub fn delete_clause(input: &str) -> IResult<&str, ast::DeleteClause> {
+    let (input, _) = multispace0(input)?;
+
+    // Check for DETACH DELETE
+    let (input, detach) = match tuple::<_, _, nom::error::Error<&str>, _>((tag_no_case("DETACH"), multispace1))(input) {
+        Ok((rest, _)) => (rest, true),
+        Err(_) => (input, false),
+    };
+
+    let (input, _) = tag_no_case("DELETE")(input)?;
+    let (input, _) = multispace1(input)?;
+
+    // Parse comma-separated list of variables
+    let (input, expressions) = separated_list1(
+        tuple((multispace0, char(','), multispace0)),
+        map(identifier, |s| s.to_string()),
+    )(input)?;
+
+    Ok((input, ast::DeleteClause { expressions, detach }))
+}
+
+// Parses the REMOVE clause (e.g. REMOVE n.property, REMOVE n:Label)
+pub fn remove_clause(input: &str) -> IResult<&str, ast::RemoveClause> {
+    let (input, _) = multispace0(input)?;
+    let (input, _) = tag_no_case("REMOVE")(input)?;
+    let (input, _) = multispace1(input)?;
+
+    // Parse comma-separated list of remove items
+    let (input, items) = separated_list1(
+        tuple((multispace0, char(','), multispace0)),
+        alt((
+            // Try label removal first: n:Label
+            map(
+                tuple((identifier, char(':'), identifier)),
+                |(var, _, label)| ast::RemoveItem::Label {
+                    variable: var.to_string(),
+                    label: label.to_string(),
+                },
+            ),
+            // Then property removal: n.property
+            map(
+                tuple((identifier, char('.'), identifier)),
+                |(var, _, prop)| ast::RemoveItem::Property {
+                    variable: var.to_string(),
+                    property: prop.to_string(),
+                },
+            ),
+        )),
+    )(input)?;
+
+    Ok((input, ast::RemoveClause { items }))
+}
+
+// Parses standalone SET clause (e.g. SET n.name = 'Alice', m.age = 30)
+pub fn standalone_set_clause(input: &str) -> IResult<&str, Vec<ast::SetClause>> {
+    let (input, _) = multispace0(input)?;
+    let (input, _) = tag_no_case("SET")(input)?;
+    let (input, _) = multispace1(input)?;
+
+    // Parse comma-separated list of set operations
+    separated_list1(
+        tuple((multispace0, char(','), multispace0)),
+        set_clause,
+    )(input)
+}
+
 // Parses a property value (e.g., 42, 'hello', true, [1, 2, 3], {name: 'Alice'})
 fn property_value(input: &str) -> IResult<&str, PropertyValue> {
     // Try to parse as a parameter
@@ -1328,6 +1404,18 @@ pub fn clause(input: &str) -> IResult<&str, Spanned<Clause>> {
             let start = offset(full_input, input);
             Spanned::new(Clause::Call(c), start)
         }),
+        map(delete_clause, |c| {
+            let start = offset(full_input, input);
+            Spanned::new(Clause::Delete(c), start)
+        }),
+        map(remove_clause, |c| {
+            let start = offset(full_input, input);
+            Spanned::new(Clause::Remove(c), start)
+        }),
+        map(standalone_set_clause, |c| {
+            let start = offset(full_input, input);
+            Spanned::new(Clause::Set(c), start)
+        }),
     ))(input)
 }
 
@@ -1390,6 +1478,9 @@ pub fn parse_query(input: &str) -> IResult<&str, Query> {
         return_clauses: Vec::new(),
         unwind_clauses: Vec::new(),
         call_clauses: Vec::new(),
+        delete_clauses: Vec::new(),
+        remove_clauses: Vec::new(),
+        set_clauses: Vec::new(),
     };
 
     for spanned_clause in clauses {
@@ -1403,6 +1494,9 @@ pub fn parse_query(input: &str) -> IResult<&str, Query> {
             Clause::Return(return_clause) => query.return_clauses.push(return_clause),
             Clause::Unwind(unwind_clause) => query.unwind_clauses.push(unwind_clause),
             Clause::Call(call_clause) => query.call_clauses.push(call_clause),
+            Clause::Delete(delete_clause) => query.delete_clauses.push(delete_clause),
+            Clause::Remove(remove_clause) => query.remove_clauses.push(remove_clause),
+            Clause::Set(set_clauses) => query.set_clauses.extend(set_clauses),
             Clause::Query(_) => {
                 // Handle nested queries if needed
             }
@@ -1456,7 +1550,7 @@ fn validate_clause_order(
                 ));
             }
 
-            // After MATCH - can have UNWIND, WHERE, WITH, RETURN, or more MATCH
+            // After MATCH - can have UNWIND, WHERE, WITH, RETURN, or more MATCH, or write operations (DELETE/REMOVE/SET)
             (ClauseOrderState::AfterMatch, Clause::Match(_) | Clause::OptionalMatch(_)) => {
                 ClauseOrderState::AfterMatch
             }
@@ -1468,6 +1562,9 @@ fn validate_clause_order(
                 ClauseOrderState::AfterWrite
             }
             (ClauseOrderState::AfterMatch, Clause::Call(_)) => ClauseOrderState::AfterCall,
+            (ClauseOrderState::AfterMatch, Clause::Delete(_) | Clause::Remove(_) | Clause::Set(_)) => {
+                ClauseOrderState::AfterWrite
+            }
 
             // After UNWIND - can have WHERE, WITH, RETURN, or writing clauses
             (ClauseOrderState::AfterUnwind, Clause::Unwind(_)) => ClauseOrderState::AfterUnwind,
@@ -1478,8 +1575,11 @@ fn validate_clause_order(
                 ClauseOrderState::AfterWrite
             }
             (ClauseOrderState::AfterUnwind, Clause::Call(_)) => ClauseOrderState::AfterCall,
+            (ClauseOrderState::AfterUnwind, Clause::Delete(_) | Clause::Remove(_) | Clause::Set(_)) => {
+                ClauseOrderState::AfterWrite
+            }
 
-            // After WHERE - can have MATCH, WITH, RETURN, or more WHERE
+            // After WHERE - can have MATCH, WITH, RETURN, or more WHERE, or write operations
             (ClauseOrderState::AfterWhere, Clause::Match(_) | Clause::OptionalMatch(_)) => {
                 ClauseOrderState::AfterMatch
             }
@@ -1491,6 +1591,9 @@ fn validate_clause_order(
                 ClauseOrderState::AfterWrite
             }
             (ClauseOrderState::AfterWhere, Clause::Call(_)) => ClauseOrderState::AfterCall,
+            (ClauseOrderState::AfterWhere, Clause::Delete(_) | Clause::Remove(_) | Clause::Set(_)) => {
+                ClauseOrderState::AfterWrite
+            }
 
             // After WITH - can have MATCH, UNWIND, WHERE, WITH, RETURN, or writing clauses
             // WITH creates a projection that allows starting a new reading phase
@@ -1505,6 +1608,9 @@ fn validate_clause_order(
                 ClauseOrderState::AfterWrite
             }
             (ClauseOrderState::AfterWith, Clause::Call(_)) => ClauseOrderState::AfterCall,
+            (ClauseOrderState::AfterWith, Clause::Delete(_) | Clause::Remove(_) | Clause::Set(_)) => {
+                ClauseOrderState::AfterWrite
+            }
 
             // After CALL - can have WHERE, WITH, RETURN, or writing clauses
             (ClauseOrderState::AfterCall, Clause::Where(_)) => ClauseOrderState::AfterWhere,
@@ -1514,6 +1620,9 @@ fn validate_clause_order(
                 ClauseOrderState::AfterWrite
             }
             (ClauseOrderState::AfterCall, Clause::Call(_)) => ClauseOrderState::AfterCall,
+            (ClauseOrderState::AfterCall, Clause::Delete(_) | Clause::Remove(_) | Clause::Set(_)) => {
+                ClauseOrderState::AfterWrite
+            }
 
             // After RETURN - can have CREATE/MERGE (writing clauses)
             (ClauseOrderState::AfterReturn, Clause::Create(_) | Clause::Merge(_)) => {
@@ -1547,6 +1656,9 @@ fn validate_clause_order(
 
             // After write clause - can have more write clauses, RETURN, or WITH
             (ClauseOrderState::AfterWrite, Clause::Create(_) | Clause::Merge(_)) => {
+                ClauseOrderState::AfterWrite
+            }
+            (ClauseOrderState::AfterWrite, Clause::Delete(_) | Clause::Remove(_) | Clause::Set(_)) => {
                 ClauseOrderState::AfterWrite
             }
             (ClauseOrderState::AfterWrite, Clause::Return(_)) => ClauseOrderState::AfterReturn,
@@ -1609,6 +1721,9 @@ fn clause_name(clause: &Clause) -> &'static str {
         Clause::Merge(_) => "MERGE",
         Clause::Query(_) => "Query",
         Clause::Call(_) => "CALL",
+        Clause::Delete(_) => "DELETE",
+        Clause::Remove(_) => "REMOVE",
+        Clause::Set(_) => "SET",
     }
 }
 
@@ -3487,5 +3602,215 @@ mod tests {
                 panic!("string_literal_local failed with single quotes: {:?}", e);
             }
         }
+    }
+
+    // === DELETE clause tests ===
+    #[test]
+    fn test_delete_single_variable() {
+        let input = "DELETE n";
+        let (_, clause) = delete_clause(input).unwrap();
+        assert!(!clause.detach);
+        assert_eq!(clause.expressions.len(), 1);
+        assert_eq!(clause.expressions[0], "n");
+    }
+
+    #[test]
+    fn test_delete_multiple_variables() {
+        let input = "DELETE n, r, m";
+        let (_, clause) = delete_clause(input).unwrap();
+        assert!(!clause.detach);
+        assert_eq!(clause.expressions.len(), 3);
+        assert_eq!(clause.expressions, vec!["n", "r", "m"]);
+    }
+
+    #[test]
+    fn test_detach_delete_single() {
+        let input = "DETACH DELETE n";
+        let (_, clause) = delete_clause(input).unwrap();
+        assert!(clause.detach);
+        assert_eq!(clause.expressions.len(), 1);
+        assert_eq!(clause.expressions[0], "n");
+    }
+
+    #[test]
+    fn test_detach_delete_multiple() {
+        let input = "DETACH DELETE n, r";
+        let (_, clause) = delete_clause(input).unwrap();
+        assert!(clause.detach);
+        assert_eq!(clause.expressions.len(), 2);
+        assert_eq!(clause.expressions, vec!["n", "r"]);
+    }
+
+    // === REMOVE clause tests ===
+    #[test]
+    fn test_remove_property() {
+        let input = "REMOVE n.name";
+        let (_, clause) = remove_clause(input).unwrap();
+        assert_eq!(clause.items.len(), 1);
+        match &clause.items[0] {
+            ast::RemoveItem::Property { variable, property } => {
+                assert_eq!(variable, "n");
+                assert_eq!(property, "name");
+            }
+            _ => panic!("Expected Property, got Label"),
+        }
+    }
+
+    #[test]
+    fn test_remove_label() {
+        let input = "REMOVE n:TempLabel";
+        let (_, clause) = remove_clause(input).unwrap();
+        assert_eq!(clause.items.len(), 1);
+        match &clause.items[0] {
+            ast::RemoveItem::Label { variable, label } => {
+                assert_eq!(variable, "n");
+                assert_eq!(label, "TempLabel");
+            }
+            _ => panic!("Expected Label, got Property"),
+        }
+    }
+
+    #[test]
+    fn test_remove_multiple_properties() {
+        let input = "REMOVE n.name, n.age, m.address";
+        let (_, clause) = remove_clause(input).unwrap();
+        assert_eq!(clause.items.len(), 3);
+        match &clause.items[0] {
+            ast::RemoveItem::Property { variable, property } => {
+                assert_eq!(variable, "n");
+                assert_eq!(property, "name");
+            }
+            _ => panic!("Expected Property"),
+        }
+    }
+
+    #[test]
+    fn test_remove_mixed_items() {
+        let input = "REMOVE n.name, n:Label, m.age";
+        let (_, clause) = remove_clause(input).unwrap();
+        assert_eq!(clause.items.len(), 3);
+        
+        match &clause.items[0] {
+            ast::RemoveItem::Property { variable, property } => {
+                assert_eq!(variable, "n");
+                assert_eq!(property, "name");
+            }
+            _ => panic!("Expected Property at index 0"),
+        }
+        
+        match &clause.items[1] {
+            ast::RemoveItem::Label { variable, label } => {
+                assert_eq!(variable, "n");
+                assert_eq!(label, "Label");
+            }
+            _ => panic!("Expected Label at index 1"),
+        }
+    }
+
+    // === Standalone SET clause tests ===
+    #[test]
+    fn test_standalone_set_single() {
+        let input = "SET n.name = 'Alice'";
+        let (_, clauses) = standalone_set_clause(input).unwrap();
+        assert_eq!(clauses.len(), 1);
+        assert_eq!(clauses[0].variable, "n");
+        assert_eq!(clauses[0].property, "name");
+    }
+
+    #[test]
+    fn test_standalone_set_multiple() {
+        let input = "SET n.name = 'Alice', n.age = 30";
+        let (_, clauses) = standalone_set_clause(input).unwrap();
+        assert_eq!(clauses.len(), 2);
+        assert_eq!(clauses[0].variable, "n");
+        assert_eq!(clauses[0].property, "name");
+        assert_eq!(clauses[1].variable, "n");
+        assert_eq!(clauses[1].property, "age");
+    }
+
+    // === Full query tests ===
+    #[test]
+    fn test_match_delete_query() {
+        let input = "MATCH (n:Temp) DELETE n";
+        let result = crate::parse_query(input);
+        assert!(result.is_ok(), "DELETE query should parse successfully");
+        let query = result.unwrap();
+        assert_eq!(query.match_clauses.len(), 1);
+        assert_eq!(query.delete_clauses.len(), 1);
+        assert!(!query.delete_clauses[0].detach);
+    }
+
+    #[test]
+    fn test_match_detach_delete_query() {
+        let input = "MATCH (n:Temp)-[r:REL]->(m) DETACH DELETE n";
+        let result = crate::parse_query(input);
+        assert!(result.is_ok(), "DETACH DELETE query should parse successfully");
+        let query = result.unwrap();
+        assert_eq!(query.match_clauses.len(), 1);
+        assert_eq!(query.delete_clauses.len(), 1);
+        assert!(query.delete_clauses[0].detach);
+    }
+
+    #[test]
+    fn test_match_remove_property_query() {
+        let input = "MATCH (n:Person) REMOVE n.age";
+        let result = crate::parse_query(input);
+        assert!(result.is_ok(), "REMOVE property query should parse successfully");
+        let query = result.unwrap();
+        assert_eq!(query.match_clauses.len(), 1);
+        assert_eq!(query.remove_clauses.len(), 1);
+    }
+
+    #[test]
+    fn test_match_remove_label_query() {
+        let input = "MATCH (n:Person) REMOVE n:TempLabel";
+        let result = crate::parse_query(input);
+        assert!(result.is_ok(), "REMOVE label query should parse successfully");
+        let query = result.unwrap();
+        assert_eq!(query.match_clauses.len(), 1);
+        assert_eq!(query.remove_clauses.len(), 1);
+    }
+
+    #[test]
+    fn test_match_set_query() {
+        let input = "MATCH (n:Person) SET n.updated = timestamp()";
+        let result = crate::parse_query(input);
+        assert!(result.is_ok(), "SET query should parse successfully");
+        let query = result.unwrap();
+        assert_eq!(query.match_clauses.len(), 1);
+        assert_eq!(query.set_clauses.len(), 1);
+    }
+
+    #[test]
+    fn test_match_where_delete_query() {
+        let input = "MATCH (n:Temp) WHERE n.age < 18 DELETE n";
+        let result = crate::parse_query(input);
+        assert!(result.is_ok(), "MATCH WHERE DELETE query should parse successfully");
+        let query = result.unwrap();
+        assert_eq!(query.match_clauses.len(), 1);
+        assert_eq!(query.where_clauses.len(), 1);
+        assert_eq!(query.delete_clauses.len(), 1);
+    }
+
+    #[test]
+    fn test_match_delete_return_query() {
+        let input = "MATCH (n:Temp) DELETE n RETURN count(n) AS deleted";
+        let result = crate::parse_query(input);
+        assert!(result.is_ok(), "DELETE with RETURN should parse successfully");
+        let query = result.unwrap();
+        assert_eq!(query.match_clauses.len(), 1);
+        assert_eq!(query.delete_clauses.len(), 1);
+        assert_eq!(query.return_clauses.len(), 1);
+    }
+
+    #[test]
+    fn test_combined_write_operations() {
+        let input = "MATCH (n:Person) SET n.processed = true DELETE n";
+        let result = crate::parse_query(input);
+        assert!(result.is_ok(), "Combined SET and DELETE should parse successfully");
+        let query = result.unwrap();
+        assert_eq!(query.match_clauses.len(), 1);
+        assert_eq!(query.set_clauses.len(), 1);
+        assert_eq!(query.delete_clauses.len(), 1);
     }
 }
