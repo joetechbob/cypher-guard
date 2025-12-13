@@ -651,18 +651,25 @@ fn check_property_comparison_types(
     comparison: &PropertyComparison,
     elements: &QueryElements,
     schema: &DbSchema,
-    type_check_level: TypeCheckLevel,
+    _type_check_level: TypeCheckLevel,
 ) -> Option<TypeIssue> {
-    // Get the node label for this variable
-    let label = elements.variable_node_bindings.get(&comparison.variable)?;
-    
-    // Get the property type from schema
-    let properties = schema.node_props.get(label)?;
-    let prop_def = properties.iter().find(|p| p.name == comparison.property)?;
-    
+    // Try to get the property definition from either node or relationship bindings
+    let prop_def = if let Some(label) = elements.variable_node_bindings.get(&comparison.variable) {
+        // Variable is bound to a node label - search in node properties
+        schema.node_props.get(label)
+            .and_then(|properties| properties.iter().find(|p| p.name == comparison.property))
+    } else if let Some(rel_type) = elements.variable_relationship_bindings.get(&comparison.variable) {
+        // Variable is bound to a relationship type - search in relationship properties
+        schema.rel_props.get(rel_type)
+            .and_then(|properties| properties.iter().find(|p| p.name == comparison.property))
+    } else {
+        // No binding found
+        None
+    }?;
+
     // Parse the property type
     let prop_type = parse_neo4j_type(&prop_def.neo4j_type.to_string());
-    
+
     // Infer the comparison value type
     let value_type = match comparison.value_type {
         PropertyValueType::String => Neo4jType::String,
@@ -672,7 +679,7 @@ fn check_property_comparison_types(
         PropertyValueType::DateTime => Neo4jType::DateTime,
         PropertyValueType::Null | PropertyValueType::Unknown => return None,  // Skip
     };
-    
+
     // Check compatibility (blocklist approach)
     if let Some(base_severity) = check_type_compatibility(&prop_type, &value_type) {
         let message = format!(
@@ -682,26 +689,26 @@ fn check_property_comparison_types(
             prop_type,
             value_type
         );
-        
+
         let suggestion = match (&prop_type, &value_type) {
             (Neo4jType::String, Neo4jType::Date) => {
-                Some(format!("Convert string to date: WHERE date({}.{}) <= date(...)", 
+                Some(format!("Convert string to date: WHERE date({}.{}) <= date(...)",
                     comparison.variable, comparison.property))
             }
             _ => None,
         };
-        
+
         // Note: severity from check_type_compatibility is already appropriate
         // (Error for silent failures, Warning for likely unintentional)
         // No need to downgrade based on TypeCheckLevel - the base severity is correct
-        
+
         return Some(TypeIssue {
             severity: base_severity,
             message,
             suggestion,
         });
     }
-    
+
     None
 }
 
