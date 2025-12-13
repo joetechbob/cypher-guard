@@ -50,8 +50,19 @@ pub enum OrderDirection {
 // MATCH clause
 #[derive(Debug, PartialEq, Clone)]
 pub struct MatchClause {
+    pub path_selector: Option<PathSelector>,
     pub elements: Vec<MatchElement>,
     pub is_optional: bool,
+}
+
+// Path selector for Neo4j 5.x path selection (SHORTEST, ALL SHORTEST, etc.)
+#[derive(Debug, PartialEq, Clone)]
+pub enum PathSelector {
+    Shortest { k: Option<u32> },              // SHORTEST k or SHORTEST
+    AllShortest,                              // ALL SHORTEST
+    ShortestGroups { k: u32 },                // SHORTEST k GROUPS
+    Any { k: u32 },                           // ANY k
+    All,                                      // ALL
 }
 
 // WHERE clause

@@ -62,15 +62,121 @@ pub fn match_clause(input: &str) -> IResult<&str, MatchClause> {
         Err(e) => return Err(e),
     };
     let (input, _) = tag_no_case("MATCH")(input)?;
-    let (input, _) = multispace1(input)?;
+    let (input, _) = multispace0(input)?;
+
+    // Try to parse optional path selector (Neo4j 5.x feature)
+    let (input, path_selector) = match path_selector(input) {
+        Ok((rest, selector)) => (rest, Some(selector)),
+        Err(_) => (input, None),
+    };
+
+    let (input, _) = multispace0(input)?;
     let (input, elements) = match_element_list(input)?;
     Ok((
         input,
         MatchClause {
+            path_selector,
             elements,
             is_optional,
         },
     ))
+}
+
+/// Parses path selectors (Neo4j 5.x feature)
+/// Examples: SHORTEST 2, ALL SHORTEST, SHORTEST 3 GROUPS, ANY 5, ALL
+/// NOTE: This should only match standalone path selectors, not "shortestPath" function calls
+fn path_selector(input: &str) -> IResult<&str, ast::PathSelector> {
+    let (input, _) = multispace0(input)?;
+
+    // Check if this looks like a function call (shortestPath, allShortestPaths, etc.)
+    // If next few chars look like a function, bail early
+    if input.to_lowercase().starts_with("shortestpath")
+        || input.to_lowercase().starts_with("allshortestpaths")
+    {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Tag,
+        )));
+    }
+
+    // Try to parse ALL SHORTEST
+    if let Ok((rest, _)) = tuple::<_, _, nom::error::Error<&str>, _>((
+        tag_no_case("ALL"),
+        multispace1,
+        tag_no_case("SHORTEST"),
+    ))(input)
+    {
+        // Make sure it's not followed by "Path" (which would make it allShortestPaths)
+        let (rest2, _) = multispace0(rest)?;
+        if rest2.to_lowercase().starts_with("path") {
+            return Err(nom::Err::Error(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Tag,
+            )));
+        }
+        return Ok((rest, ast::PathSelector::AllShortest));
+    }
+
+    // Try to parse SHORTEST k GROUPS or SHORTEST k or SHORTEST
+    if let Ok((rest, _)) = tag_no_case::<_, _, nom::error::Error<&str>>("SHORTEST")(input) {
+        // Make sure it's not followed by "Path" (which would make it shortestPath)
+        let (rest2, _) = multispace0(rest)?;
+        if rest2.to_lowercase().starts_with("path") {
+            return Err(nom::Err::Error(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Tag,
+            )));
+        }
+
+        // Try to parse the k value (optional)
+        if let Ok((rest3, k_str)) = nom::character::complete::digit1::<_, nom::error::Error<&str>>(rest2) {
+            let k: u32 = k_str.parse().unwrap_or(1);
+            let (rest4, _) = multispace0(rest3)?;
+
+            // Check for GROUPS keyword
+            if let Ok((rest5, _)) = tag_no_case::<_, _, nom::error::Error<&str>>("GROUPS")(rest4) {
+                return Ok((rest5, ast::PathSelector::ShortestGroups { k }));
+            }
+
+            // Just SHORTEST k (not GROUPS)
+            return Ok((rest4, ast::PathSelector::Shortest { k: Some(k) }));
+        }
+
+        // Just SHORTEST (no k value)
+        return Ok((rest2, ast::PathSelector::Shortest { k: None }));
+    }
+
+    // Try to parse ANY k
+    if let Ok((rest, _)) = tuple::<_, _, nom::error::Error<&str>, _>((
+        tag_no_case("ANY"),
+        multispace1,
+    ))(input)
+    {
+        let (rest2, k_str) = nom::character::complete::digit1(rest)?;
+        let k: u32 = k_str.parse().unwrap_or(1);
+        return Ok((rest2, ast::PathSelector::Any { k }));
+    }
+
+    // Try to parse ALL (by itself, not ALL SHORTEST)
+    if let Ok((rest, _)) = tag_no_case::<_, _, nom::error::Error<&str>>("ALL")(input) {
+        // Need to make sure it's not followed by SHORTEST
+        let (rest2, _) = multispace0(rest)?;
+        if let Ok((_, _)) = tag_no_case::<_, _, nom::error::Error<&str>>("SHORTEST")(rest2) {
+            // It's ALL SHORTEST, which we already handled above
+            // This is a fallback that shouldn't be reached
+            return Err(nom::Err::Error(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Tag,
+            )));
+        }
+        return Ok((rest2, ast::PathSelector::All));
+    }
+
+    // No path selector found
+    Err(nom::Err::Error(nom::error::Error::new(
+        input,
+        nom::error::ErrorKind::Tag,
+    )))
 }
 
 // Parses a return item: expression with optional AS alias

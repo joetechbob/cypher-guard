@@ -1112,6 +1112,7 @@ mod tests {
         let query = Query {
             use_clause: None,
             match_clauses: vec![MatchClause {
+                    path_selector: None,
                 elements: vec![MatchElement {
                     path_function: None,
                     path_var: Some("a".to_string()),
@@ -1151,6 +1152,7 @@ mod tests {
         let query = Query {
             use_clause: None,
             match_clauses: vec![MatchClause {
+                    path_selector: None,
                 elements: vec![MatchElement {
                     path_function: None,
                     path_var: Some("a".to_string()),
@@ -1202,6 +1204,7 @@ mod tests {
         let query = Query {
             use_clause: None,
             match_clauses: vec![MatchClause {
+                    path_selector: None,
                 elements: vec![MatchElement {
                     path_function: None,
                     path_var: Some("a".to_string()),
@@ -1254,6 +1257,7 @@ mod tests {
         let query = Query {
             use_clause: None,
             match_clauses: vec![MatchClause {
+                    path_selector: None,
                 elements: vec![MatchElement {
                     path_function: None,
                     path_var: Some("a".to_string()),
@@ -1631,6 +1635,7 @@ mod tests {
         let valid_query = Query {
             use_clause: None,
             match_clauses: vec![MatchClause {
+                    path_selector: None,
                 elements: vec![MatchElement {
                     path_function: None,
                     path_var: None,
@@ -1690,6 +1695,7 @@ mod tests {
         let invalid_query = Query {
             use_clause: None,
             match_clauses: vec![MatchClause {
+                    path_selector: None,
                 elements: vec![MatchElement {
                     path_function: None,
                     path_var: None,
@@ -1796,6 +1802,7 @@ mod tests {
         let query = Query {
             use_clause: None,
             match_clauses: vec![MatchClause {
+                    path_selector: None,
                 elements: vec![MatchElement {
                     path_function: None,
                     path_var: None,
@@ -1879,6 +1886,7 @@ mod tests {
         let query = Query {
             use_clause: None,
             match_clauses: vec![MatchClause {
+                    path_selector: None,
                 elements: vec![MatchElement {
                     path_function: None,
                     path_var: None,
@@ -1967,6 +1975,7 @@ mod tests {
         let query = Query {
             use_clause: None,
             match_clauses: vec![MatchClause {
+                    path_selector: None,
                 elements: vec![MatchElement {
                     path_function: None,
                     path_var: None,
@@ -2046,6 +2055,7 @@ mod tests {
         let query = Query {
             use_clause: None,
             match_clauses: vec![MatchClause {
+                    path_selector: None,
                 elements: vec![MatchElement {
                     path_function: None,
                     path_var: None,
@@ -2118,6 +2128,7 @@ mod tests {
         let query = Query {
             use_clause: None,
             match_clauses: vec![MatchClause {
+                    path_selector: None,
                 elements: vec![MatchElement {
                     path_function: None,
                     path_var: None,
@@ -2210,6 +2221,7 @@ mod tests {
         let query = Query {
             use_clause: None,
             match_clauses: vec![MatchClause {
+                    path_selector: None,
                 elements: vec![MatchElement {
                     path_function: None,
                     path_var: None,
