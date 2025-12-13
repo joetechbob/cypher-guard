@@ -1,6 +1,6 @@
 # Cypher-Guard: Neo4j Coverage Analysis
 
-**Status**: 402/402 tests passing (100%) ✅
+**Status**: 420/420 tests passing (100%) ✅
 **Date**: 2025-12-13 (Updated)
 **Goal**: Achieve comprehensive Neo4j Cypher coverage
 
@@ -20,9 +20,12 @@
 #### Writing Clauses
 - [x] `CREATE` - Node and relationship creation
 - [x] `MERGE` - Merge patterns
-- [x] `SET` - Property updates (including functions like `timestamp()`)
+- [x] `SET` - Property updates (including functions like `timestamp()`) **and standalone SET** ✨ NEW!
 - [x] `ON CREATE SET` - Conditional updates on create
 - [x] `ON MATCH SET` - Conditional updates on match
+- [x] `DELETE` - Delete nodes and relationships ✨ NEW!
+- [x] `DETACH DELETE` - Delete nodes and cascade-delete relationships ✨ NEW!
+- [x] `REMOVE` - Remove properties and labels ✨ NEW!
 
 #### Pattern Matching
 - [x] Node patterns: `(n:Label {prop: value})`
@@ -90,6 +93,17 @@
 
 ## ✅ Recently Implemented (December 2025)
 
+### Write Operations (Latest - December 13, 2025)
+- **DELETE/DETACH DELETE**: Remove nodes and relationships
+  - `MATCH (n:Temp) DELETE n`
+  - `MATCH (n:Node)-[r:REL]->(m) DETACH DELETE n`
+- **REMOVE**: Remove properties and labels
+  - `MATCH (n:Person) REMOVE n.age`
+  - `MATCH (n:Person) REMOVE n:TempLabel`
+- **Standalone SET**: Property updates outside MERGE
+  - `MATCH (n:Person) SET n.updated = timestamp()`
+- **Tests**: 18 new tests (402 → 420 tests)
+
 ### Pattern Predicates in WHERE Clauses
 - **Status**: ✅ Fully implemented and tested
 - **Examples**:
@@ -107,24 +121,24 @@
 
 ## 🔴 Missing Features (Prioritized)
 
-### Priority 1: Write Operations (HIGH)
+### Priority 1: Write Operations (✅ COMPLETED!)
 
 #### DELETE
-- [ ] `DELETE` - Delete nodes/relationships
-- [ ] `DETACH DELETE` - Delete node and relationships
-- **Priority**: HIGH - Common write operation
+- [x] `DELETE` - Delete nodes/relationships ✅
+- [x] `DETACH DELETE` - Delete node and relationships ✅
+- **Status**: COMPLETED - December 13, 2025
 - **Example**: `MATCH (n:Temp) DELETE n`
 
 #### REMOVE
-- [ ] `REMOVE` - Remove properties or labels
-- **Priority**: HIGH - Property/label management
+- [x] `REMOVE` - Remove properties or labels ✅
+- **Status**: COMPLETED - December 13, 2025
 - **Examples**:
   - `REMOVE n.property`
   - `REMOVE n:Label`
 
 #### Standalone SET
-- [ ] `SET` as standalone clause (currently only in MERGE context)
-- **Priority**: HIGH - Property updates
+- [x] `SET` as standalone clause ✅
+- **Status**: COMPLETED - December 13, 2025
 - **Example**: `MATCH (n) SET n.updated = timestamp()`
 
 ### Priority 2: Quantified Path Patterns - Validation (MEDIUM)
@@ -210,12 +224,12 @@
 
 ## Test Coverage by Category
 
-### Test Distribution (402 Total Tests)
+### Test Distribution (420 Total Tests)
 - **test_priority1_features.rs**: 52 tests - Advanced features, pattern predicates
 - **test_comprehensive_queries.rs**: 38 tests - Edge cases, CASE expressions
 - **test_agent_queries.rs**: 10 tests - Real-world queries
 - **test_user_query.rs**: 1 test - User query validation
-- **parser/clauses.rs**: 141 tests - Comprehensive parser coverage
+- **parser/clauses.rs**: 159 tests - Comprehensive parser coverage (+18 for DELETE/REMOVE/SET) ✨ NEW!
 - **validation.rs**: 17 tests - Validation logic
 - **validation_typecheck_tests.rs**: ~100 tests - Type checking (Off/Warnings/Strict)
 - **types.rs**: 4 tests - Type system
@@ -229,11 +243,11 @@
 
 ## Next Steps (Prioritized Roadmap)
 
-### Phase 1: Write Operations (Next Sprint)
+### Phase 1: Write Operations (✅ COMPLETED!)
 1. ✅ **Pattern Predicates** - COMPLETED!
-2. 🎯 **DELETE/DETACH DELETE** - Implement delete operations
-3. 🎯 **REMOVE** - Property and label removal
-4. 🎯 **Standalone SET** - SET clause outside MERGE
+2. ✅ **DELETE/DETACH DELETE** - COMPLETED!
+3. ✅ **REMOVE** - COMPLETED!
+4. ✅ **Standalone SET** - COMPLETED!
 
 ### Phase 2: QPP Validation
 1. Add comprehensive QPP validation tests
@@ -252,19 +266,20 @@
 
 ## Performance Benchmarks
 
-- **Current**: 402 tests in 0.01s (excellent performance)
+- **Current**: 420 tests in 0.02s (excellent performance)
 - **Parser efficiency**: Fast nom-based parser with minimal backtracking
 - **Memory**: Lean AST structure
 - **Target**: Maintain <0.05s for 500+ tests
 
 ## Success Metrics
 
-- ✅ **Current**: 402/402 tests (100% pass rate)
+- ✅ **Current**: 420/420 tests (100% pass rate)
 - ✅ **Pattern Predicates**: Fully implemented
 - ✅ **Expression Operators**: Complete coverage
-- 🎯 **Target**: 450+ tests covering write operations
+- ✅ **Write Operations**: DELETE, REMOVE, SET all implemented
+- 🎯 **Target**: Maintain 100% pass rate as features grow
 - 🎯 **Agent query success**: >95% for real-world patterns
-- 🎯 **Parse speed**: <0.05s for 500+ tests
+- 🎯 **Parse speed**: <0.05s for 500+ tests (currently 0.02s for 420 tests)
 
 ## Documentation Links
 
@@ -276,7 +291,14 @@
 
 ## Recent Accomplishments 🎉
 
-### December 13, 2025
+### December 13, 2025 (Latest)
+- ✅ **Write Operations Complete**: DELETE, DETACH DELETE, REMOVE, standalone SET all implemented
+- ✅ **Test Coverage**: Increased from 402 to 420 tests (+18 comprehensive write operation tests)
+- ✅ **Clause Ordering**: Updated state machine to handle all write operations
+- ✅ **Full Query Support**: MATCH + WHERE + write operations working seamlessly
+- ✅ **Combined Operations**: Can chain multiple write operations (SET + DELETE)
+
+### December 13, 2025 (Earlier)
 - ✅ **Pattern Predicates in WHERE**: Full AST, parser, and validation support
 - ✅ **Test Coverage**: Increased from 350 to 402 tests
 - ✅ **Real-World Queries**: Recommendation engine with `WHERE NOT` patterns working
