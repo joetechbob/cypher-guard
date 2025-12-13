@@ -860,14 +860,42 @@ pub fn call_clause(input: &str) -> IResult<&str, ast::CallClause> {
         ));
     }
 
-    // Try to parse as a procedure call: CALL procedure() or CALL db.procedure()
-    let (input, procedure) = map(
-        separated_pair(identifier, char('.'), identifier),
-        |(namespace, name)| format!("{}.{}", namespace, name),
-    )(input)?;
+    // Try to parse as a procedure call: CALL procedure(), CALL db.procedure(), or CALL apoc.coll.procedure()
+    // Parse first identifier
+    let (input, first) = identifier(input)?;
+    let mut procedure_parts = vec![first.to_string()];
+
+    // Parse additional dot-separated identifiers (e.g., .coll.contains in apoc.coll.contains)
+    let mut current_input = input;
+    loop {
+        match char::<&str, nom::error::Error<&str>>('.')(current_input) {
+            Ok((rest, _)) => {
+                match identifier(rest) {
+                    Ok((rest2, part)) => {
+                        procedure_parts.push(part.to_string());
+                        current_input = rest2;
+                    }
+                    Err(_) => break,
+                }
+            }
+            Err(_) => break,
+        }
+    }
+
+    let input = current_input;
+    let procedure = procedure_parts.join(".");
 
     let (input, _) = multispace0(input)?;
     let (input, _) = char('(')(input)?;
+    let (input, _) = multispace0(input)?;
+
+    // Parse optional arguments (for now, we just skip over them until closing paren)
+    // TODO: Properly parse and store arguments in AST
+    let (input, _args) = opt(separated_list0(
+        tuple((multispace0, char(','), multispace0)),
+        parse_expression,
+    ))(input)?;
+
     let (input, _) = multispace0(input)?;
     let (input, _) = char(')')(input)?;
 
