@@ -107,13 +107,25 @@ pub fn relationship_pattern(input: &str) -> IResult<&str, RelationshipPattern> {
     let (input, left_dir) = alt((tag("<-"), tag("-")))(input)?;
     println!("DEBUG: Parsed left direction: {}", left_dir);
 
-    // Parse relationship details
-    let (input, mut details) = relationship_details(input)?;
-    println!("DEBUG: Parsed relationship details: {:?}", details);
+    // Parse optional relationship details (e.g., [r:KNOWS] or just --)
+    let (input, details_opt) = opt(relationship_details)(input)?;
+    println!("DEBUG: Parsed relationship details: {:?}", details_opt);
 
     // Parse the right side of the relationship (either '->' or '-')
     let (input, right_dir) = alt((tag("->"), tag("-")))(input)?;
     println!("DEBUG: Parsed right direction: {}", right_dir);
+
+    // Use provided details or create empty details
+    let mut details = details_opt.unwrap_or_else(|| RelationshipDetails {
+        variable: None,
+        direction: Direction::Undirected,
+        properties: None,
+        rel_type: None,
+        length: None,
+        where_clause: None,
+        quantifier: None,
+        is_optional: false,
+    });
 
     // Set direction based on arrows
     details.direction = match (left_dir, right_dir) {

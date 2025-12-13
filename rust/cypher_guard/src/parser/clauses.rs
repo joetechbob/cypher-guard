@@ -736,16 +736,107 @@ fn parameter(input: &str) -> IResult<&str, String> {
     Ok((input, name.to_string()))
 }
 
+// Parse pattern comprehension: [(person)-->(friend) WHERE friend.age > 25 | friend.name]
+fn parse_pattern_comprehension(input: &str) -> IResult<&str, PropertyValue> {
+    let (input, _) = char('[')(input)?;
+    let (input, _) = multispace0(input)?;
+
+    // Must start with a pattern '('
+    if !input.starts_with('(') {
+        return Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag)));
+    }
+
+    let (input, pattern) = pattern_element_sequence(input, false)?;
+    let (input, _) = multispace0(input)?;
+
+    // Optional WHERE clause
+    let (input, predicate) = if let Ok((input2, _)) = tag::<_, _, nom::error::Error<&str>>("WHERE")(input) {
+        let (input3, _) = multispace1(input2)?;
+        let (input4, cond) = parse_basic_condition(input3)?;
+        (input4, Some(Box::new(cond)))
+    } else {
+        (input, None)
+    };
+
+    let (input, _) = multispace0(input)?;
+
+    // Optional transform (after |)
+    let (input, transform) = if input.starts_with('|') {
+        let input2 = &input[1..];
+        let (input3, _) = multispace0(input2)?;
+        let (input4, expr) = parse_expression(input3)?;
+        (input4, Some(Box::new(expr)))
+    } else {
+        (input, None)
+    };
+
+    let (input, _) = multispace0(input)?;
+    let (input, _) = char(']')(input)?;
+
+    Ok((input, PropertyValue::PatternComprehension {
+        pattern,
+        predicate,
+        transform,
+    }))
+}
+
+// Parse list comprehension: [x IN list WHERE x > 2 | x * 2]
+fn parse_list_comprehension(input: &str) -> IResult<&str, PropertyValue> {
+    let (input, _) = char('[')(input)?;
+    let (input, _) = multispace0(input)?;
+    let (input, var) = identifier(input)?;
+    let (input, _) = multispace1(input)?;
+    let (input, _) = tag("IN")(input)?;
+    let (input, _) = multispace1(input)?;
+    let (input, list) = parse_expression(input)?;
+    let (input, _) = multispace0(input)?;
+
+    // Optional WHERE clause
+    let (input, predicate) = if let Ok((input2, _)) = tag::<_, _, nom::error::Error<&str>>("WHERE")(input) {
+        let (input3, _) = multispace1(input2)?;
+        let (input4, cond) = parse_basic_condition(input3)?;
+        (input4, Some(Box::new(cond)))
+    } else {
+        (input, None)
+    };
+
+    let (input, _) = multispace0(input)?;
+
+    // Optional transform (after |)
+    let (input, transform) = if input.starts_with('|') {
+        let input2 = &input[1..];
+        let (input3, _) = multispace0(input2)?;
+        let (input4, expr) = parse_expression(input3)?;
+        (input4, Some(Box::new(expr)))
+    } else {
+        (input, None)
+    };
+
+    let (input, _) = multispace0(input)?;
+    let (input, _) = char(']')(input)?;
+
+    Ok((input, PropertyValue::ListComprehension {
+        variable: var.to_string(),
+        list: Box::new(list),
+        predicate,
+        transform,
+    }))
+}
+
 // Parse a primary expression (atoms that can be used in binary operations)
 fn parse_primary_expression(input: &str) -> IResult<&str, PropertyValue> {
     let (input, _) = multispace0(input)?;
-    
+
     alt((
         // Try function calls first
         map(function_call, |(name, args)| PropertyValue::FunctionCall {
             name,
             args: args.into_iter().map(PropertyValue::String).collect(),
         }),
+        // Try pattern comprehension (e.g., [(person)-->(friend) WHERE friend.age > 25 | friend.name])
+        parse_pattern_comprehension,
+        // Try list comprehension (e.g., [x IN list WHERE x > 2 | x * 2])
+        parse_list_comprehension,
         // Try lists (e.g., [1, 2, 3])
         map(
             delimited(
@@ -787,6 +878,46 @@ fn parse_primary_expression(input: &str) -> IResult<&str, PropertyValue> {
         // Try simple identifiers
         map(identifier, |s| PropertyValue::Identifier(s.to_string())),
     ))(input)
+}
+
+// Parse a single map projection item
+fn parse_map_projection_item(input: &str) -> IResult<&str, ast::MapProjectionItem> {
+    use ast::MapProjectionItem;
+
+    let (input, _) = multispace0(input)?;
+
+    // Try property shorthand: .prop or .*
+    if input.starts_with('.') {
+        let input2 = &input[1..];
+        if input2.starts_with('*') {
+            return Ok((&input2[1..], MapProjectionItem::AllProperties));
+        }
+        let (input3, prop) = identifier(input2)?;
+        return Ok((input3, MapProjectionItem::Property(prop.to_string())));
+    }
+
+    // Try computed property: key: expr
+    let (input, key) = identifier(input)?;
+    let (input, _) = multispace0(input)?;
+    let (input, _) = char(':')(input)?;
+    let (input, _) = multispace0(input)?;
+    let (input, value) = parse_expression(input)?;
+
+    Ok((input, MapProjectionItem::Computed {
+        key: key.to_string(),
+        value,
+    }))
+}
+
+// Parse map projection properties: .prop, .*, key: expr
+fn parse_map_projection_properties(input: &str) -> IResult<&str, Vec<ast::MapProjectionItem>> {
+    let (input, _) = multispace0(input)?;
+
+    // Parse comma-separated projection items
+    separated_list1(
+        tuple((multispace0, char(','), multispace0)),
+        parse_map_projection_item
+    )(input)
 }
 
 // Parse postfix expressions: list[0], list[1..3], etc.
@@ -832,6 +963,21 @@ fn parse_postfix_expression(input: &str) -> IResult<&str, PropertyValue> {
                         index: Box::new(index),
                     };
                     input = input7;
+                    continue;
+                }
+            }
+        }
+
+        // Check for map projection: base{.prop1, .prop2, key: expr}
+        if input2.starts_with('{') {
+            if let Ok((input3, properties)) = parse_map_projection_properties(&input2[1..]) {
+                let (input4, _) = multispace0(input3)?;
+                if input4.starts_with('}') {
+                    base = PropertyValue::MapProjection {
+                        base: Box::new(base),
+                        properties,
+                    };
+                    input = &input4[1..];
                     continue;
                 }
             }
