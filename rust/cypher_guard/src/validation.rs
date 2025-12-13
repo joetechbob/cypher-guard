@@ -1,6 +1,7 @@
 use crate::errors::CypherGuardValidationError;
 use crate::parser::ast::*;
 use crate::schema::DbSchema;
+use crate::types::{check_type_compatibility, parse_neo4j_type, Neo4jType, TypeCheckLevel, TypeIssue, TypeMismatchSeverity};
 use std::collections::{HashMap, HashSet};
 
 /// Represents the extracted elements from a Cypher query that need validation
@@ -470,6 +471,72 @@ fn extract_from_with_expression(expression: &WithExpression, elements: &mut Quer
     }
 }
 
+/// Validation configuration options
+#[derive(Debug, Clone)]
+pub struct ValidationOptions {
+    pub type_checking: TypeCheckLevel,
+}
+
+impl Default for ValidationOptions {
+    fn default() -> Self {
+        Self {
+            type_checking: TypeCheckLevel::Off,
+        }
+    }
+}
+
+/// Check a property comparison for type mismatches
+fn check_property_comparison_types(
+    comparison: &PropertyComparison,
+    elements: &QueryElements,
+    schema: &DbSchema,
+) -> Option<TypeIssue> {
+    // Get the node label for this variable
+    let label = elements.variable_node_bindings.get(&comparison.variable)?;
+    
+    // Get the property type from schema
+    let properties = schema.node_props.get(label)?;
+    let prop_def = properties.iter().find(|p| p.name == comparison.property)?;
+    
+    // Parse the property type
+    let prop_type = parse_neo4j_type(&prop_def.neo4j_type.to_string());
+    
+    // Infer the comparison value type
+    let value_type = match comparison.value_type {
+        PropertyValueType::String => Neo4jType::String,
+        PropertyValueType::Number => Neo4jType::Integer,  // Simplified
+        PropertyValueType::Boolean => Neo4jType::Boolean,
+        PropertyValueType::Null | PropertyValueType::Unknown => return None,  // Skip
+    };
+    
+    // Check compatibility (blocklist approach)
+    if let Some(severity) = check_type_compatibility(&prop_type, &value_type) {
+        let message = format!(
+            "Type mismatch: {}.{} is {}, compared with {}",
+            comparison.variable,
+            comparison.property,
+            prop_type,
+            value_type
+        );
+        
+        let suggestion = match (&prop_type, &value_type) {
+            (Neo4jType::String, Neo4jType::Date) => {
+                Some(format!("Convert string to date: WHERE date({}.{}) <= date(...)", 
+                    comparison.variable, comparison.property))
+            }
+            _ => None,
+        };
+        
+        return Some(TypeIssue {
+            severity,
+            message,
+            suggestion,
+        });
+    }
+    
+    None
+}
+
 /// Extract property access from a string (e.g., "a.name", "r.role")
 fn extract_property_access_from_string(
     s: &str,
@@ -525,11 +592,12 @@ fn extract_property_access_from_string(
     }
 }
 
-/// Validate extracted query elements against the schema
-pub fn validate_query_elements(
+/// Validate extracted query elements against the schema with optional type checking
+pub fn validate_query_elements_with_options(
     elements: &QueryElements,
     schema: &DbSchema,
-) -> Vec<CypherGuardValidationError> {
+    options: &ValidationOptions,
+) -> (Vec<CypherGuardValidationError>, Vec<TypeIssue>) {
     eprintln!("DEBUG: validate_query_elements called");
     eprintln!(
         "DEBUG: elements.referenced_variables: {:?}",
@@ -802,6 +870,26 @@ pub fn validate_query_elements(
         }
     }
 
+    // NEW: Type checking logic (only if enabled)
+    let mut type_issues = Vec::new();
+    if options.type_checking != TypeCheckLevel::Off {
+        for comparison in &elements.property_comparisons {
+            if let Some(issue) = check_property_comparison_types(comparison, elements, schema) {
+                type_issues.push(issue);
+            }
+        }
+    }
+    
+    (errors, type_issues)
+}
+
+/// Backward compatible wrapper (no type checking)
+pub fn validate_query_elements(
+    elements: &QueryElements,
+    schema: &DbSchema,
+) -> Vec<CypherGuardValidationError> {
+    let options = ValidationOptions::default();  // Type checking OFF
+    let (errors, _type_issues) = validate_query_elements_with_options(elements, schema, &options);
     errors
 }
 

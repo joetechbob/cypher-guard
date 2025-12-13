@@ -9,6 +9,7 @@ pub mod parser {
 }
 mod schema;
 mod validation;
+pub mod types;
 
 use errors::convert_nom_error;
 pub use errors::{
@@ -116,7 +117,9 @@ pub fn parse_query(query: &str) -> std::result::Result<Query, CypherGuardParsing
     }
 }
 
-use crate::validation::{extract_query_elements, validate_query_elements};
+use crate::validation::{extract_query_elements, validate_query_elements, validate_query_elements_with_options, ValidationOptions};
+pub use crate::types::{TypeCheckLevel, TypeIssue, TypeMismatchSeverity};
+pub use crate::validation::ValidationOptions as CypherValidationOptions;
 
 /// Validate full query with schema: returns true if valid, or error on parse failure
 pub fn validate_cypher_with_schema(query: &str, schema: &DbSchema) -> Result<bool> {
