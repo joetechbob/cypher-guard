@@ -370,12 +370,8 @@ pub fn parse_basic_condition(input: &str) -> IResult<&str, ast::WhereCondition> 
 
     // Try to parse as a comparison first
     let comparison_result = (|| {
-        let (input, left) = alt((
-            map(property_access, ast::PropertyValue::Identifier),
-            map(identifier, |s| {
-                ast::PropertyValue::Identifier(s.to_string())
-            }),
-        ))(input)?;
+        // Parse left side as an expression
+        let (input, left) = parse_expression(input)?;
         let (input, _) = multispace0(input)?;
         let (input, operator) = alt((
             tag("STARTS WITH"),
