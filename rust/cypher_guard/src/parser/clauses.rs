@@ -110,11 +110,15 @@ fn return_item(input: &str) -> IResult<&str, String> {
     }
 }
 
-// Parses the RETURN clause (e.g. RETURN a, b, a.name)
+// Parses the RETURN clause (e.g. RETURN a, b, a.name, RETURN DISTINCT a ORDER BY a.name)
 pub fn return_clause(input: &str) -> IResult<&str, ReturnClause> {
     let (input, _) = multispace0(input)?;
     let (input, _) = tag("RETURN")(input)?;
     let (input, _) = multispace1(input)?;
+
+    // Parse optional DISTINCT keyword
+    let (input, distinct) = opt(tuple((tag_no_case("DISTINCT"), multispace1)))(input)?;
+    let distinct = distinct.is_some();
 
     // Parse the first item (required)
     let (input, first_item) = return_item(input)?;
@@ -136,7 +140,40 @@ pub fn return_clause(input: &str) -> IResult<&str, ReturnClause> {
         )));
     }
 
-    Ok((input, ReturnClause { items }))
+    // Parse optional ORDER BY clause
+    let (input, order_by) = opt(preceded(
+        tuple((multispace0, tag_no_case("ORDER"), multispace1, tag_no_case("BY"), multispace1)),
+        separated_list1(
+            tuple((multispace0, char(','), multispace0)),
+            |input| {
+                let (input, expr) = alt((
+                    map(property_access, |s| s),
+                    map(identifier, |s| s.to_string()),
+                ))(input)?;
+                let (input, _) = multispace0(input)?;
+                let (input, direction) = opt(alt((
+                    map(tag_no_case("ASC"), |_| ast::OrderDirection::Asc),
+                    map(tag_no_case("DESC"), |_| ast::OrderDirection::Desc),
+                )))(input)?;
+                Ok((input, ast::OrderByItem { expression: expr, direction }))
+            }
+        ),
+    ))(input)?;
+    let order_by = order_by.unwrap_or_default();
+
+    // Parse optional SKIP clause
+    let (input, skip) = opt(preceded(
+        tuple((multispace0, tag_no_case("SKIP"), multispace1)),
+        map(digit1, |s: &str| s.parse::<u64>().unwrap()),
+    ))(input)?;
+
+    // Parse optional LIMIT clause
+    let (input, limit) = opt(preceded(
+        tuple((multispace0, tag_no_case("LIMIT"), multispace1)),
+        map(digit1, |s: &str| s.parse::<u64>().unwrap()),
+    ))(input)?;
+
+    Ok((input, ReturnClause { items, distinct, order_by, limit, skip }))
 }
 
 // Parses a numeric literal
@@ -495,14 +532,19 @@ fn with_item(input: &str) -> IResult<&str, WithItem> {
     Ok((input, result))
 }
 
-// Parses the WITH clause (e.g. WITH a, count(*) AS count)
+// Parses the WITH clause (e.g. WITH a, count(*) AS count, WITH DISTINCT a.age AS age)
 pub fn with_clause(input: &str) -> IResult<&str, WithClause> {
     let (input, _) = multispace0(input)?;
     let (input, _) = tag("WITH")(input)?;
     let (input, _) = multispace1(input)?;
+    
+    // Parse optional DISTINCT keyword
+    let (input, distinct) = opt(tuple((tag_no_case("DISTINCT"), multispace1)))(input)?;
+    let distinct = distinct.is_some();
+    
     let (input, items) =
         separated_list1(tuple((multispace0, char(','), multispace0)), with_item)(input)?;
-    Ok((input, WithClause { items }))
+    Ok((input, WithClause { items, distinct }))
 }
 
 // Parses a subquery (content inside CALL { ... })

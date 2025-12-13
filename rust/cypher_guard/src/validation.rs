@@ -40,6 +40,8 @@ pub enum PropertyValueType {
     String,
     Number,
     Boolean,
+    Date,
+    DateTime,
     Null,
     Unknown,
 }
@@ -138,6 +140,14 @@ fn property_value_to_type(value: &PropertyValue) -> PropertyValueType {
         PropertyValue::Number(_) => PropertyValueType::Number,
         PropertyValue::Boolean(_) => PropertyValueType::Boolean,
         PropertyValue::Null => PropertyValueType::Null,
+        PropertyValue::FunctionCall { name, .. } => {
+            // Detect date/datetime functions
+            match name.to_lowercase().as_str() {
+                "date" => PropertyValueType::Date,
+                "datetime" => PropertyValueType::DateTime,
+                _ => PropertyValueType::Unknown,
+            }
+        }
         PropertyValue::Identifier(_) => PropertyValueType::Unknown,
         _ => PropertyValueType::Unknown,
     }
@@ -421,6 +431,10 @@ fn extract_from_where_condition(condition: &WhereCondition, elements: &mut Query
             extract_from_where_condition(left, elements);
             extract_from_where_condition(right, elements);
         }
+        WhereCondition::Xor(left, right) => {
+            extract_from_where_condition(left, elements);
+            extract_from_where_condition(right, elements);
+        }
         WhereCondition::Not(condition) => {
             extract_from_where_condition(condition, elements);
         }
@@ -490,6 +504,7 @@ fn check_property_comparison_types(
     comparison: &PropertyComparison,
     elements: &QueryElements,
     schema: &DbSchema,
+    type_check_level: TypeCheckLevel,
 ) -> Option<TypeIssue> {
     // Get the node label for this variable
     let label = elements.variable_node_bindings.get(&comparison.variable)?;
@@ -506,11 +521,13 @@ fn check_property_comparison_types(
         PropertyValueType::String => Neo4jType::String,
         PropertyValueType::Number => Neo4jType::Integer,  // Simplified
         PropertyValueType::Boolean => Neo4jType::Boolean,
+        PropertyValueType::Date => Neo4jType::Date,
+        PropertyValueType::DateTime => Neo4jType::DateTime,
         PropertyValueType::Null | PropertyValueType::Unknown => return None,  // Skip
     };
     
     // Check compatibility (blocklist approach)
-    if let Some(severity) = check_type_compatibility(&prop_type, &value_type) {
+    if let Some(base_severity) = check_type_compatibility(&prop_type, &value_type) {
         let message = format!(
             "Type mismatch: {}.{} is {}, compared with {}",
             comparison.variable,
@@ -527,8 +544,12 @@ fn check_property_comparison_types(
             _ => None,
         };
         
+        // Note: severity from check_type_compatibility is already appropriate
+        // (Error for silent failures, Warning for likely unintentional)
+        // No need to downgrade based on TypeCheckLevel - the base severity is correct
+        
         return Some(TypeIssue {
-            severity,
+            severity: base_severity,
             message,
             suggestion,
         });
@@ -841,25 +862,9 @@ pub fn validate_query_elements_with_options(
         }
 
         if let Some(prop_def) = property_def {
-            // Check if the value type matches the property type
-            let type_mismatch = match (&comparison.value_type, &prop_def.neo4j_type.to_string()) {
-                (PropertyValueType::String, t) if t == "STRING" => false,
-                (PropertyValueType::Number, t) if t == "INTEGER" || t == "FLOAT" => false,
-                (PropertyValueType::Boolean, t) if t == "BOOLEAN" => false,
-                (PropertyValueType::Null, _) => false, // Null is always valid
-                (PropertyValueType::Unknown, _) => false, // Skip unknown types (variables)
-                // Strict type checking: no automatic conversions between types
-                _ => true, // Type mismatch
-            };
-
-            if type_mismatch {
-                errors.push(CypherGuardValidationError::InvalidPropertyType {
-                    variable: comparison.variable.clone(),
-                    property: comparison.property.clone(),
-                    expected_type: prop_def.neo4j_type.to_string(),
-                    actual_value: comparison.value.clone(),
-                });
-            }
+            // OLD VALIDATION: Only check if property exists, not types
+            // Type checking is now handled by the NEW type checking system
+            // This avoids duplicate error messages
         } else {
             // Property not found in schema - this is also an error
             errors.push(CypherGuardValidationError::InvalidPropertyAccess {
@@ -874,7 +879,11 @@ pub fn validate_query_elements_with_options(
     let mut type_issues = Vec::new();
     if options.type_checking != TypeCheckLevel::Off {
         for comparison in &elements.property_comparisons {
-            if let Some(issue) = check_property_comparison_types(comparison, elements, schema) {
+            if let Some(mut issue) = check_property_comparison_types(comparison, elements, schema, options.type_checking) {
+                // In Warnings mode, downgrade all issues to Warning severity
+                if options.type_checking == TypeCheckLevel::Warnings {
+                    issue.severity = TypeMismatchSeverity::Warning;
+                }
                 type_issues.push(issue);
             }
         }
@@ -892,6 +901,11 @@ pub fn validate_query_elements(
     let (errors, _type_issues) = validate_query_elements_with_options(elements, schema, &options);
     errors
 }
+
+// Include comprehensive type checking integration tests
+#[cfg(test)]
+#[path = "validation_typecheck_tests.rs"]
+mod typecheck_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1029,6 +1043,10 @@ mod tests {
             where_clauses: vec![],
             return_clauses: vec![ReturnClause {
                 items: vec!["a.name".to_string(), "a.age".to_string()],
+                distinct: false,
+                order_by: vec![],
+                limit: None,
+                skip: None,
             }],
             unwind_clauses: vec![],
             call_clauses: vec![],
@@ -1072,6 +1090,7 @@ mod tests {
                     },
                     alias: Some("person_name".to_string()),
                 }],
+                distinct: false,
             }],
             where_clauses: vec![],
             return_clauses: vec![],

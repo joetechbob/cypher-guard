@@ -15,6 +15,22 @@ pub struct Query {
 #[derive(Debug, PartialEq, Clone)]
 pub struct ReturnClause {
     pub items: Vec<String>,
+    pub distinct: bool,
+    pub order_by: Vec<OrderByItem>,
+    pub limit: Option<u64>,
+    pub skip: Option<u64>,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct OrderByItem {
+    pub expression: String,
+    pub direction: Option<OrderDirection>,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum OrderDirection {
+    Asc,
+    Desc,
 }
 
 // MATCH clause
@@ -47,6 +63,7 @@ pub enum WhereCondition {
     },
     And(Box<WhereCondition>, Box<WhereCondition>),
     Or(Box<WhereCondition>, Box<WhereCondition>),
+    Xor(Box<WhereCondition>, Box<WhereCondition>),
     Not(Box<WhereCondition>),
     Parenthesized(Box<WhereCondition>),
 }
@@ -181,6 +198,45 @@ pub enum PropertyValue {
     },
     Parameter(String),
     Identifier(String), // For variable references and property access
+    BinaryOp {
+        left: Box<PropertyValue>,
+        operator: String,
+        right: Box<PropertyValue>,
+    },
+    IndexAccess {
+        base: Box<PropertyValue>,
+        index: Box<PropertyValue>,
+    },
+    SliceAccess {
+        base: Box<PropertyValue>,
+        start: Option<Box<PropertyValue>>,
+        end: Option<Box<PropertyValue>>,
+    },
+    ListComprehension {
+        variable: String,
+        list: Box<PropertyValue>,
+        predicate: Option<Box<WhereCondition>>,
+        transform: Option<Box<PropertyValue>>,
+    },
+    PatternComprehension {
+        pattern: Vec<PatternElement>,
+        predicate: Option<Box<WhereCondition>>,
+        transform: Option<Box<PropertyValue>>,
+    },
+    MapProjection {
+        base: Box<PropertyValue>,
+        properties: Vec<MapProjectionItem>,
+    },
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum MapProjectionItem {
+    Property(String),              // .name
+    AllProperties,                 // .*
+    Computed {
+        key: String,
+        value: PropertyValue,
+    },
 }
 
 // MERGE clause
@@ -220,6 +276,7 @@ pub struct SetClause {
 #[derive(Debug, PartialEq, Clone)]
 pub struct WithClause {
     pub items: Vec<WithItem>,
+    pub distinct: bool,
 }
 
 #[derive(Debug, PartialEq, Clone)]

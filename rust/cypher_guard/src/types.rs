@@ -114,6 +114,24 @@ pub fn check_type_compatibility(
         (Neo4jType::String, Neo4jType::Boolean) | (Neo4jType::Boolean, Neo4jType::String) => {
             Some(TypeMismatchSeverity::Error)
         }
+        (Neo4jType::Integer, Neo4jType::Boolean) | (Neo4jType::Boolean, Neo4jType::Integer) => {
+            Some(TypeMismatchSeverity::Error)
+        }
+        (Neo4jType::Float, Neo4jType::Boolean) | (Neo4jType::Boolean, Neo4jType::Float) => {
+            Some(TypeMismatchSeverity::Error)
+        }
+        (Neo4jType::Integer, Neo4jType::Date) | (Neo4jType::Date, Neo4jType::Integer) => {
+            Some(TypeMismatchSeverity::Error)
+        }
+        (Neo4jType::Integer, Neo4jType::DateTime) | (Neo4jType::DateTime, Neo4jType::Integer) => {
+            Some(TypeMismatchSeverity::Error)
+        }
+        (Neo4jType::Float, Neo4jType::Date) | (Neo4jType::Date, Neo4jType::Float) => {
+            Some(TypeMismatchSeverity::Error)
+        }
+        (Neo4jType::Float, Neo4jType::DateTime) | (Neo4jType::DateTime, Neo4jType::Float) => {
+            Some(TypeMismatchSeverity::Error)
+        }
         
         // WARNING: Likely unintentional
         (Neo4jType::String, Neo4jType::Integer) | (Neo4jType::Integer, Neo4jType::String) => {
@@ -123,7 +141,7 @@ pub fn check_type_compatibility(
             Some(TypeMismatchSeverity::Warning)
         }
         
-        // ALLOW: All other combinations (including Integer↔Float, Date↔DateTime)
+        // ALLOW: All other combinations (including Integer↔Float compatible)
         _ => None,
     }
 }

@@ -11,6 +11,15 @@ mod schema;
 mod validation;
 pub mod types;
 
+#[cfg(test)]
+mod test_user_query;
+#[cfg(test)]
+mod test_agent_queries;
+#[cfg(test)]
+mod test_comprehensive_queries;
+#[cfg(test)]
+mod test_priority1_features;
+
 use errors::convert_nom_error;
 pub use errors::{
     CypherGuardError, CypherGuardParsingError, CypherGuardSchemaError, CypherGuardValidationError,
