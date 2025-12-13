@@ -25,9 +25,17 @@ fn number_literal_components(input: &str) -> IResult<&str, i64> {
     Ok((input, n.parse().unwrap()))
 }
 
+// Parse a Cypher parameter (e.g., $param)
+fn parameter_components(input: &str) -> IResult<&str, String> {
+    let (input, _) = char('$')(input)?;
+    let (input, name) = identifier(input)?;
+    Ok((input, name.to_string()))
+}
+
 // Shared property value parser
 pub fn property_value(input: &str) -> IResult<&str, PropertyValue> {
     alt((
+        map(parameter_components, PropertyValue::Parameter),
         map(string_literal_components, PropertyValue::String),
         map(number_literal_components, PropertyValue::Number),
         map(function_call, |(name, args)| PropertyValue::FunctionCall {

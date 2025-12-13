@@ -466,8 +466,20 @@ fn test_list_operations_query() {
 
 #[test]
 fn test_recommendation_engine_query() {
-    // Simplified query - testing node properties with parameter
-    let query = "MATCH (user:User {id: 123}) RETURN user.name";
+    let query = r#"
+        MATCH (user:User {id: $userId})
+        MATCH (user)-[:LIKES]->(item:Item)
+        MATCH (item)<-[:LIKES]-(otherUser:User)
+        MATCH (otherUser)-[:LIKES]->(recommendation:Item)
+        WHERE NOT (user)-[:LIKES]->(recommendation)
+          AND recommendation.category IN $categories
+          AND recommendation.rating >= 4.0
+        RETURN DISTINCT recommendation.name,
+               recommendation.rating,
+               count(*) AS strength
+        ORDER BY strength DESC, recommendation.rating DESC
+        LIMIT 10
+    "#;
     let result = parse_query(query);
     assert!(
         result.is_ok(),
