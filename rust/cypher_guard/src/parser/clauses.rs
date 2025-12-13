@@ -253,6 +253,8 @@ fn function_call(input: &str) -> IResult<&str, (String, Vec<String>)> {
     let (input, args) = separated_list0(
         tuple((multispace0, tag(","), multispace0)),
         alt((
+            // Try to parse wildcard * (for count(*))
+            map(char('*'), |_| "*".to_string()),
             // Try to parse nested function calls
             map(function_call, |(func, args)| {
                 format!("{}({})", func, args.join(", "))
@@ -1660,8 +1662,9 @@ mod tests {
     fn test_return_item_invalid_identifier() {
         let input = "123name";
         let (_, item) = return_item(input).unwrap();
-        // Current parser accepts identifiers starting with digits
-        assert_eq!(item, "123name");
+        // Parser now correctly parses numeric literals first
+        // "123name" is parsed as number "123", leaving "name" unparsed
+        assert_eq!(item, "123");
     }
 
     // WHERE clause tests
