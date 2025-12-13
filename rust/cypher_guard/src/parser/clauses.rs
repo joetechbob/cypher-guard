@@ -357,18 +357,7 @@ pub fn parse_basic_condition(input: &str) -> IResult<&str, ast::WhereCondition> 
         ));
     }
 
-    // Try to parse as a function call
-    if let Ok((rest, (function, args))) = function_call(input) {
-        return Ok((
-            rest,
-            ast::WhereCondition::FunctionCall {
-                function,
-                arguments: args,
-            },
-        ));
-    }
-
-    // Try to parse as a comparison first
+    // Try to parse as a comparison FIRST (which can include function calls in expressions)
     let comparison_result = (|| {
         // Parse left side as an expression
         let (input, left) = parse_expression(input)?;
@@ -402,40 +391,8 @@ pub fn parse_basic_condition(input: &str) -> IResult<&str, ast::WhereCondition> 
         }
 
         let (input, _) = multispace0(input)?;
-        let (input, right) = alt((
-            // Parse lists first (for IN operator)
-            map(
-                delimited(
-                    char('['),
-                    separated_list0(
-                        tuple((multispace0, char(','), multispace0)),
-                        alt((
-                            map(string_literal_local, ast::PropertyValue::String),
-                            map(numeric_literal, |n| {
-                                ast::PropertyValue::Number(n.parse().unwrap())
-                            }),
-                            map(tag_no_case("true"), |_| ast::PropertyValue::Boolean(true)),
-                            map(tag_no_case("false"), |_| ast::PropertyValue::Boolean(false)),
-                            map(tag_no_case("null"), |_| ast::PropertyValue::Null),
-                            map(parameter, ast::PropertyValue::Parameter),
-                        )),
-                    ),
-                    char(']'),
-                ),
-                ast::PropertyValue::List,
-            ),
-            map(string_literal_local, ast::PropertyValue::String),
-            map(numeric_literal, |n| {
-                ast::PropertyValue::Number(n.parse().unwrap())
-            }),
-            map(tag_no_case("true"), |_| ast::PropertyValue::Boolean(true)),
-            map(tag_no_case("false"), |_| ast::PropertyValue::Boolean(false)),
-            map(tag_no_case("null"), |_| ast::PropertyValue::Null),
-            map(parameter, ast::PropertyValue::Parameter),
-            map(identifier, |s| {
-                ast::PropertyValue::Identifier(s.to_string())
-            }),
-        ))(input)?;
+        // Parse right side as an expression (supports functions, arithmetic, etc.)
+        let (input, right) = parse_expression(input)?;
         Ok((
             input,
             ast::WhereCondition::Comparison {
@@ -448,6 +405,18 @@ pub fn parse_basic_condition(input: &str) -> IResult<&str, ast::WhereCondition> 
 
     if let Ok(result) = comparison_result {
         return Ok(result);
+    }
+
+    // If comparison parsing failed, try to parse as a standalone function call
+    // (for cases like WHERE exists(x) without a comparison operator)
+    if let Ok((rest, (function, args))) = function_call(input) {
+        return Ok((
+            rest,
+            ast::WhereCondition::FunctionCall {
+                function,
+                arguments: args,
+            },
+        ));
     }
 
     // If comparison parsing failed, try to parse as a path property
@@ -1069,6 +1038,11 @@ fn property_value(input: &str) -> IResult<&str, PropertyValue> {
 
     // Try to parse as a primitive value
     let (input, value) = alt((
+        // Try function calls first (e.g., timestamp())
+        map(function_call, |(name, args)| PropertyValue::FunctionCall {
+            name,
+            args: args.into_iter().map(PropertyValue::String).collect(),
+        }),
         map(string_literal_local, PropertyValue::String),
         map(identifier, |s| PropertyValue::String(s.to_string())),
         map(numeric_literal, |n| {
@@ -1794,11 +1768,16 @@ mod tests {
         let (_, clause) = where_clause(input).unwrap();
         assert_eq!(clause.conditions.len(), 1);
         match &clause.conditions[0] {
-            ast::WhereCondition::PathProperty { path_var, property } => {
-                assert_eq!(path_var, "a");
-                assert_eq!(property, "age");
+            ast::WhereCondition::Comparison {
+                left,
+                operator,
+                right,
+            } => {
+                assert_eq!(left, &ast::PropertyValue::Identifier("a.age".to_string()));
+                assert_eq!(operator, "<=");
+                assert_eq!(right, &ast::PropertyValue::Number(30));
             }
-            _ => unreachable!("Expected path property condition"),
+            _ => panic!("Expected comparison condition, got: {:?}", &clause.conditions[0]),
         }
     }
 
@@ -1808,11 +1787,16 @@ mod tests {
         let (_, clause) = where_clause(input).unwrap();
         assert_eq!(clause.conditions.len(), 1);
         match &clause.conditions[0] {
-            ast::WhereCondition::PathProperty { path_var, property } => {
-                assert_eq!(path_var, "a");
-                assert_eq!(property, "age");
+            ast::WhereCondition::Comparison {
+                left,
+                operator,
+                right,
+            } => {
+                assert_eq!(left, &ast::PropertyValue::Identifier("a.age".to_string()));
+                assert_eq!(operator, ">=");
+                assert_eq!(right, &ast::PropertyValue::Number(30));
             }
-            _ => unreachable!("Expected path property condition"),
+            _ => panic!("Expected comparison condition, got: {:?}", &clause.conditions[0]),
         }
     }
 
@@ -1822,15 +1806,22 @@ mod tests {
         let (_, clause) = where_clause(input).unwrap();
         assert_eq!(clause.conditions.len(), 1);
         match &clause.conditions[0] {
-            ast::WhereCondition::FunctionCall {
-                function,
-                arguments,
+            ast::WhereCondition::Comparison {
+                left,
+                operator,
+                right,
             } => {
-                assert_eq!(function, "length");
-                assert_eq!(arguments.len(), 1);
-                assert_eq!(arguments[0], "a".to_string() + "." + "name");
+                // The left side should be a function call
+                match left {
+                    ast::PropertyValue::FunctionCall { name, .. } => {
+                        assert_eq!(name, "length");
+                    }
+                    _ => panic!("Expected function call on left side, got: {:?}", left),
+                }
+                assert_eq!(operator, ">");
+                assert_eq!(right, &ast::PropertyValue::Number(5));
             }
-            _ => unreachable!("Expected function call condition"),
+            _ => panic!("Expected comparison condition, got: {:?}", &clause.conditions[0]),
         }
     }
 
