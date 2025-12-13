@@ -8,7 +8,7 @@ pub mod parser {
     pub mod utils;
 }
 mod schema;
-mod validation;
+pub mod validation;
 pub mod types;
 
 #[cfg(test)]

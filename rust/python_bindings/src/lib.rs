@@ -8,7 +8,10 @@ use ::cypher_guard::{
     DbSchemaProperty as CoreDbSchemaProperty,
     DbSchemaRelationshipPattern as CoreDbSchemaRelationshipPattern,
     PropertyType as CorePropertyType,
+    TypeCheckLevel as CoreTypeCheckLevel, TypeMismatchSeverity as CoreTypeMismatchSeverity,
+    TypeIssue as CoreTypeIssue,
 };
+use ::cypher_guard::validation::{ValidationOptions as CoreValidationOptions, extract_query_elements, validate_query_elements_with_options as core_validate_with_options};
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
@@ -1531,6 +1534,175 @@ impl DbSchema {
     }
 }
 
+// === Type Checking Types ===
+
+/// Type checking level enumeration
+#[pyclass]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypeCheckLevel {
+    Off,
+    Warnings,
+    Strict,
+}
+
+#[pymethods]
+impl TypeCheckLevel {
+    fn __repr__(&self) -> String {
+        format!("TypeCheckLevel.{}", match self {
+            TypeCheckLevel::Off => "Off",
+            TypeCheckLevel::Warnings => "Warnings",
+            TypeCheckLevel::Strict => "Strict",
+        })
+    }
+    
+    fn __str__(&self) -> String {
+        match self {
+            TypeCheckLevel::Off => "off".to_string(),
+            TypeCheckLevel::Warnings => "warnings".to_string(),
+            TypeCheckLevel::Strict => "strict".to_string(),
+        }
+    }
+}
+
+impl TypeCheckLevel {
+    fn to_core(&self) -> CoreTypeCheckLevel {
+        match self {
+            TypeCheckLevel::Off => CoreTypeCheckLevel::Off,
+            TypeCheckLevel::Warnings => CoreTypeCheckLevel::Warnings,
+            TypeCheckLevel::Strict => CoreTypeCheckLevel::Strict,
+        }
+    }
+}
+
+/// Type mismatch severity enumeration
+#[pyclass]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypeMismatchSeverity {
+    Warning,
+    Error,
+}
+
+#[pymethods]
+impl TypeMismatchSeverity {
+    fn __repr__(&self) -> String {
+        format!("TypeMismatchSeverity.{}", match self {
+            TypeMismatchSeverity::Warning => "Warning",
+            TypeMismatchSeverity::Error => "Error",
+        })
+    }
+    
+    fn __str__(&self) -> String {
+        match self {
+            TypeMismatchSeverity::Warning => "warning".to_string(),
+            TypeMismatchSeverity::Error => "error".to_string(),
+        }
+    }
+}
+
+impl TypeMismatchSeverity {
+    fn from_core(severity: &CoreTypeMismatchSeverity) -> Self {
+        match severity {
+            CoreTypeMismatchSeverity::Warning => TypeMismatchSeverity::Warning,
+            CoreTypeMismatchSeverity::Error => TypeMismatchSeverity::Error,
+        }
+    }
+}
+
+/// Type issue wrapper
+#[pyclass]
+#[derive(Debug, Clone)]
+pub struct TypeIssue {
+    #[pyo3(get)]
+    pub severity: TypeMismatchSeverity,
+    #[pyo3(get)]
+    pub message: String,
+    #[pyo3(get)]
+    pub suggestion: Option<String>,
+}
+
+#[pymethods]
+impl TypeIssue {
+    #[new]
+    fn new(severity: TypeMismatchSeverity, message: String, suggestion: Option<String>) -> Self {
+        Self {
+            severity,
+            message,
+            suggestion,
+        }
+    }
+    
+    fn __repr__(&self) -> String {
+        if let Some(ref sugg) = self.suggestion {
+            format!("TypeIssue(severity={:?}, message='{}', suggestion='{}')", 
+                self.severity, self.message, sugg)
+        } else {
+            format!("TypeIssue(severity={:?}, message='{}')", 
+                self.severity, self.message)
+        }
+    }
+    
+    fn __str__(&self) -> String {
+        if let Some(ref sugg) = self.suggestion {
+            format!("{}: {} (suggestion: {})", 
+                match self.severity {
+                    TypeMismatchSeverity::Warning => "Warning",
+                    TypeMismatchSeverity::Error => "Error",
+                },
+                self.message, sugg)
+        } else {
+            format!("{}: {}", 
+                match self.severity {
+                    TypeMismatchSeverity::Warning => "Warning",
+                    TypeMismatchSeverity::Error => "Error",
+                },
+                self.message)
+        }
+    }
+}
+
+impl TypeIssue {
+    fn from_core(issue: &CoreTypeIssue) -> Self {
+        Self {
+            severity: TypeMismatchSeverity::from_core(&issue.severity),
+            message: issue.message.clone(),
+            suggestion: issue.suggestion.clone(),
+        }
+    }
+}
+
+/// Validation options wrapper
+#[pyclass]
+#[derive(Debug, Clone)]
+pub struct CypherValidationOptions {
+    #[pyo3(get)]
+    pub type_checking: TypeCheckLevel,
+}
+
+#[pymethods]
+impl CypherValidationOptions {
+    #[new]
+    #[pyo3(signature = (type_checking=TypeCheckLevel::Off))]
+    fn new(type_checking: TypeCheckLevel) -> Self {
+        Self { type_checking }
+    }
+    
+    fn __repr__(&self) -> String {
+        format!("CypherValidationOptions(type_checking={:?})", self.type_checking)
+    }
+    
+    fn __str__(&self) -> String {
+        format!("CypherValidationOptions(type_checking={})", self.type_checking.__str__())
+    }
+}
+
+impl CypherValidationOptions {
+    fn to_core(&self) -> CoreValidationOptions {
+        CoreValidationOptions {
+            type_checking: self.type_checking.to_core(),
+        }
+    }
+}
+
 // === CORE PYTHON API FUNCTIONS ===
 
 #[pyfunction]
@@ -1709,6 +1881,72 @@ pub fn has_parser_errors(query: &str) -> bool {
     parse_query_rust(query).is_err()
 }
 
+/// Validate a Cypher query against a schema with options for type checking.
+///
+/// This function provides advanced validation with configurable type checking.
+/// It returns both validation errors and type issues separately.
+///
+/// Args:
+///     query (str): The Cypher query string to validate
+///     schema (DbSchema): The database schema to validate against
+///     options (CypherValidationOptions): Validation options including type checking level
+///
+/// Returns:
+///     Tuple[List[str], List[TypeIssue]]: A tuple of (validation_errors, type_issues)
+///         - validation_errors: List of schema validation error messages
+///         - type_issues: List of TypeIssue objects with type checking warnings/errors
+///
+/// Raises:
+///     ValueError: If there's a parsing error (syntax error)
+///
+/// Examples:
+///     >>> from cypher_guard import validate_query_elements_with_options, CypherValidationOptions, TypeCheckLevel
+///     >>> options = CypherValidationOptions(type_checking=TypeCheckLevel.Warnings)
+///     >>> errors, type_issues = validate_query_elements_with_options(query, schema, options)
+///     >>> for issue in type_issues:
+///     ...     print(f"{issue.severity}: {issue.message}")
+#[pyfunction]
+#[pyo3(text_signature = "(query, schema, options, /)")]
+pub fn validate_query_elements_with_options(
+    py: Python,
+    query: &str,
+    schema: DbSchema,
+    options: CypherValidationOptions,
+) -> PyResult<(Vec<String>, Vec<TypeIssue>)> {
+    // First check if the query can be parsed (syntax check)
+    let ast = match parse_query_rust(query) {
+        Ok(ast) => ast,
+        Err(e) => {
+            // If parsing fails, raise syntax error
+            return Err(convert_parsing_error(py, e));
+        }
+    };
+    
+    // Extract query elements from AST
+    let elements = extract_query_elements(&ast);
+    
+    // Validate with options
+    let (validation_errors, type_issues) = core_validate_with_options(
+        &elements,
+        &schema.inner,
+        &options.to_core(),
+    );
+    
+    // Convert validation errors to strings
+    let error_messages: Vec<String> = validation_errors
+        .into_iter()
+        .map(|e| e.to_string())
+        .collect();
+    
+    // Convert type issues to Python wrappers
+    let py_type_issues: Vec<TypeIssue> = type_issues
+        .iter()
+        .map(|issue| TypeIssue::from_core(issue))
+        .collect();
+    
+    Ok((error_messages, py_type_issues))
+}
+
 #[pymodule]
 fn cypher_guard(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add(
@@ -1726,19 +1964,27 @@ fn cypher_guard(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     ",
     )?;
 
+    // Schema classes
     m.add_class::<DbSchema>()?;
     m.add_class::<DbSchemaProperty>()?;
     m.add_class::<DbSchemaRelationshipPattern>()?;
     m.add_class::<DbSchemaConstraint>()?;
     m.add_class::<DbSchemaIndex>()?;
     m.add_class::<DbSchemaMetadata>()?;
-    m.add_function(wrap_pyfunction!(has_valid_cypher, m)?)?;
+    
+    // Type checking classes
+    m.add_class::<TypeCheckLevel>()?;
+    m.add_class::<TypeMismatchSeverity>()?;
+    m.add_class::<TypeIssue>()?;
+    m.add_class::<CypherValidationOptions>()?;
 
     // Core API functions
+    m.add_function(wrap_pyfunction!(has_valid_cypher, m)?)?;
     m.add_function(wrap_pyfunction!(check_syntax, m)?)?;
     m.add_function(wrap_pyfunction!(validate_cypher, m)?)?;
     m.add_function(wrap_pyfunction!(is_write, m)?)?;
     m.add_function(wrap_pyfunction!(has_parser_errors, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_query_elements_with_options, m)?)?;
 
     // Expose error classes using the simpler approach from PyO3 docs
     m.add(
