@@ -2,7 +2,7 @@ use nom::{
     branch::alt,
     bytes::complete::{tag, tag_no_case},
     character::complete::{char, digit1, multispace0, multispace1},
-    combinator::{map, opt, recognize},
+    combinator::{map, opt, peek, recognize},
     multi::{many0, separated_list0, separated_list1},
     sequence::{delimited, preceded, separated_pair, tuple},
     IResult,
@@ -66,47 +66,81 @@ pub fn match_clause(input: &str) -> IResult<&str, MatchClause> {
     ))
 }
 
-// Parses a return item: either an identifier, dotted property access, function call, or expression with AS alias
+// Parses a return item: expression with optional AS alias
 fn return_item(input: &str) -> IResult<&str, String> {
-    // Try to parse as a function call first
-    if let Ok((rest, (function, args))) = function_call(input) {
-        let function_call_str = format!("{}({})", function, args.join(", "));
-
-        // Check for AS alias
-        let (rest, alias) = opt(preceded(
-            tuple((multispace0, tag("AS"), multispace1)),
-            identifier,
-        ))(rest)?;
-
-        if let Some(alias_name) = alias {
-            let result = format!("{}({}) AS {}", function, args.join(", "), alias_name);
-            return Ok((rest, result));
-        } else {
-            return Ok((rest, function_call_str));
-        }
-    }
-
-    // Try to parse as a simple identifier or property access
-    let (input, first) = identifier(input)?;
-    let (input, rest) = opt(preceded(char('.'), identifier))(input)?;
-
-    let base_result = if let Some(prop) = rest {
-        format!("{}.{}", first, prop)
-    } else {
-        first.to_string()
-    };
-
-    // Check for AS alias for property access and simple identifiers
+    let (input, _) = multispace0(input)?;
+    
+    // Parse an expression
+    let (input, expr) = parse_expression(input)?;
+    
+    // Convert PropertyValue to string representation
+    let expr_str = property_value_to_string(&expr);
+    
+    // Check for AS alias
     let (input, alias) = opt(preceded(
         tuple((multispace0, tag("AS"), multispace1)),
         identifier,
     ))(input)?;
 
     if let Some(alias_name) = alias {
-        let result = format!("{} AS {}", base_result, alias_name);
+        let result = format!("{} AS {}", expr_str, alias_name);
         Ok((input, result))
     } else {
-        Ok((input, base_result))
+        Ok((input, expr_str))
+    }
+}
+
+// Helper to convert PropertyValue to string representation
+fn property_value_to_string(value: &PropertyValue) -> String {
+    match value {
+        PropertyValue::String(s) => format!("'{}'", s),
+        PropertyValue::Number(n) => n.to_string(),
+        PropertyValue::Boolean(b) => b.to_string(),
+        PropertyValue::Null => "NULL".to_string(),
+        PropertyValue::Identifier(s) => s.clone(),
+        PropertyValue::Parameter(s) => format!("${}", s),
+        PropertyValue::FunctionCall { name, args } => {
+            let args_str: Vec<String> = args.iter().map(|a| property_value_to_string(a)).collect();
+            format!("{}({})", name, args_str.join(", "))
+        }
+        PropertyValue::BinaryOp { left, operator, right } => {
+            format!("{} {} {}", property_value_to_string(left), operator, property_value_to_string(right))
+        }
+        PropertyValue::List(items) => {
+            let items_str: Vec<String> = items.iter().map(|i| property_value_to_string(i)).collect();
+            format!("[{}]", items_str.join(", "))
+        }
+        PropertyValue::Map(map) => {
+            let pairs: Vec<String> = map.iter()
+                .map(|(k, v)| format!("{}: {}", k, property_value_to_string(v)))
+                .collect();
+            format!("{{{}}}", pairs.join(", "))
+        }
+        PropertyValue::IndexAccess { base, index } => {
+            format!("{}[{}]", property_value_to_string(base), property_value_to_string(index))
+        }
+        PropertyValue::SliceAccess { base, start, end } => {
+            let start_str = start.as_ref().map(|s| property_value_to_string(s)).unwrap_or_default();
+            let end_str = end.as_ref().map(|e| property_value_to_string(e)).unwrap_or_default();
+            format!("{}[{}..{}]", property_value_to_string(base), start_str, end_str)
+        }
+        PropertyValue::ListComprehension { variable, list, predicate, transform } => {
+            let pred_str = predicate.as_ref().map(|_| " WHERE <condition>".to_string()).unwrap_or_default();
+            let trans_str = transform.as_ref().map(|t| format!(" | {}", property_value_to_string(t))).unwrap_or_default();
+            format!("[{} IN {}{}{}]", variable, property_value_to_string(list), pred_str, trans_str)
+        }
+        PropertyValue::PatternComprehension { pattern, predicate, transform } => {
+            let pred_str = predicate.as_ref().map(|_| " WHERE <condition>".to_string()).unwrap_or_default();
+            let trans_str = transform.as_ref().map(|t| format!(" | {}", property_value_to_string(t))).unwrap_or_default();
+            format!("[<pattern>{}{}]", pred_str, trans_str)
+        }
+        PropertyValue::MapProjection { base, properties } => {
+            let props_str = properties.iter()
+                .map(|_| "<property>")
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{}{{{}}}", property_value_to_string(base), props_str)
+        }
     }
 }
 
@@ -245,9 +279,28 @@ fn function_call(input: &str) -> IResult<&str, (String, Vec<String>)> {
 }
 
 // Parses WHERE expressions with proper operator precedence
-// AND binds tighter than OR, so we parse OR expressions first, then AND expressions
+// Precedence: XOR < OR < AND
 fn parse_where_expr(input: &str) -> IResult<&str, ast::WhereCondition> {
-    // Parse OR expressions (lowest precedence)
+    // Parse XOR expressions (lowest precedence)
+    let (input, mut left) = parse_or_expr(input)?;
+
+    // Parse additional XOR expressions
+    let (input, xor_conditions) = many0(preceded(
+        tuple((multispace0, tag("XOR"), multispace0)),
+        parse_or_expr,
+    ))(input)?;
+
+    // Build the XOR tree
+    for right in xor_conditions {
+        left = ast::WhereCondition::Xor(Box::new(left), Box::new(right));
+    }
+
+    Ok((input, left))
+}
+
+// Parses OR expressions
+fn parse_or_expr(input: &str) -> IResult<&str, ast::WhereCondition> {
+    // Parse OR expressions
     let (input, mut left) = parse_and_expr(input)?;
 
     // Parse additional OR expressions
@@ -325,14 +378,19 @@ pub fn parse_basic_condition(input: &str) -> IResult<&str, ast::WhereCondition> 
         ))(input)?;
         let (input, _) = multispace0(input)?;
         let (input, operator) = alt((
-            tag("="),
-            tag("<>"),
-            tag("<"),
-            tag(">"),
+            tag("STARTS WITH"),
+            tag("ENDS WITH"),
+            tag("CONTAINS"),
+            tag("IS NOT NULL"),
+            tag("IS NULL"),
             tag("<="),
             tag(">="),
-            tag("IS NULL"),
-            tag("IS NOT NULL"),
+            tag("<>"),
+            tag("=~"),
+            tag("="),
+            tag("<"),
+            tag(">"),
+            tag("IN"),
         ))(input)?;
 
         // For IS NULL and IS NOT NULL, there's no right side
@@ -349,6 +407,27 @@ pub fn parse_basic_condition(input: &str) -> IResult<&str, ast::WhereCondition> 
 
         let (input, _) = multispace0(input)?;
         let (input, right) = alt((
+            // Parse lists first (for IN operator)
+            map(
+                delimited(
+                    char('['),
+                    separated_list0(
+                        tuple((multispace0, char(','), multispace0)),
+                        alt((
+                            map(string_literal_local, ast::PropertyValue::String),
+                            map(numeric_literal, |n| {
+                                ast::PropertyValue::Number(n.parse().unwrap())
+                            }),
+                            map(tag_no_case("true"), |_| ast::PropertyValue::Boolean(true)),
+                            map(tag_no_case("false"), |_| ast::PropertyValue::Boolean(false)),
+                            map(tag_no_case("null"), |_| ast::PropertyValue::Null),
+                            map(parameter, ast::PropertyValue::Parameter),
+                        )),
+                    ),
+                    char(']'),
+                ),
+                ast::PropertyValue::List,
+            ),
             map(string_literal_local, ast::PropertyValue::String),
             map(numeric_literal, |n| {
                 ast::PropertyValue::Number(n.parse().unwrap())
@@ -356,6 +435,7 @@ pub fn parse_basic_condition(input: &str) -> IResult<&str, ast::WhereCondition> 
             map(tag_no_case("true"), |_| ast::PropertyValue::Boolean(true)),
             map(tag_no_case("false"), |_| ast::PropertyValue::Boolean(false)),
             map(tag_no_case("null"), |_| ast::PropertyValue::Null),
+            map(parameter, ast::PropertyValue::Parameter),
             map(identifier, |s| {
                 ast::PropertyValue::Identifier(s.to_string())
             }),
@@ -684,6 +764,143 @@ fn parameter(input: &str) -> IResult<&str, String> {
     let (input, _) = char('$')(input)?;
     let (input, name) = identifier(input)?;
     Ok((input, name.to_string()))
+}
+
+// Parse a primary expression (atoms that can be used in binary operations)
+fn parse_primary_expression(input: &str) -> IResult<&str, PropertyValue> {
+    let (input, _) = multispace0(input)?;
+    
+    alt((
+        // Try function calls first
+        map(function_call, |(name, args)| PropertyValue::FunctionCall {
+            name,
+            args: args.into_iter().map(PropertyValue::String).collect(),
+        }),
+        // Try parameters
+        map(parameter, PropertyValue::Parameter),
+        // Try property access (e.g., n.age)
+        map(property_access, |s| PropertyValue::Identifier(s)),
+        // Try string literals
+        map(string_literal_local, PropertyValue::String),
+        // Try numeric literals (including decimals)
+        map(
+            recognize(tuple((
+                opt(char('-')),
+                digit1,
+                opt(tuple((char('.'), digit1))),
+            ))),
+            |s: &str| PropertyValue::Number(s.parse::<i64>().unwrap_or(0)),
+        ),
+        // Try booleans
+        map(tag_no_case("true"), |_| PropertyValue::Boolean(true)),
+        map(tag_no_case("false"), |_| PropertyValue::Boolean(false)),
+        // Try NULL
+        map(tag_no_case("null"), |_| PropertyValue::Null),
+        // Try parenthesized expressions
+        delimited(
+            tuple((char('('), multispace0)),
+            parse_expression,
+            tuple((multispace0, char(')'))),
+        ),
+        // Try simple identifiers
+        map(identifier, |s| PropertyValue::Identifier(s.to_string())),
+    ))(input)
+}
+
+// Parse multiplicative expressions: *, /, %
+fn parse_multiplicative_expr(input: &str) -> IResult<&str, PropertyValue> {
+    let (mut input, mut left) = parse_primary_expression(input)?;
+    
+    loop {
+        let (input2, _) = multispace0(input)?;
+        
+        // Try to match an operator
+        if let Ok((input3, op)) = alt::<_, _, nom::error::Error<&str>, _>((
+            map(char('*'), |c| c.to_string()),
+            map(char('/'), |c| c.to_string()),
+            map(char('%'), |c| c.to_string()),
+        ))(input2) {
+            let (input4, _) = multispace0(input3)?;
+            let (input5, right) = parse_primary_expression(input4)?;
+            
+            left = PropertyValue::BinaryOp {
+                left: Box::new(left),
+                operator: op,
+                right: Box::new(right),
+            };
+            input = input5;
+        } else {
+            break;
+        }
+    }
+    
+    Ok((input, left))
+}
+
+// Parse additive expressions: +, -
+fn parse_additive_expr(input: &str) -> IResult<&str, PropertyValue> {
+    let (mut input, mut left) = parse_multiplicative_expr(input)?;
+    
+    loop {
+        let (input2, _) = multispace0(input)?;
+        
+        // Try to match + or -
+        // Be careful not to match -> (relationship operator)
+        let op_result = if input2.starts_with('+') {
+            Ok(((&input2[1..]), "+".to_string()))
+        } else if input2.starts_with('-') && !input2.starts_with("->") {
+            Ok(((&input2[1..]), "-".to_string()))
+        } else {
+            Err(nom::Err::Error(nom::error::Error::new(input2, nom::error::ErrorKind::Char)))
+        };
+        
+        if let Ok((input3, op)) = op_result {
+            let (input4, _) = multispace0(input3)?;
+            let (input5, right) = parse_multiplicative_expr(input4)?;
+            
+            left = PropertyValue::BinaryOp {
+                left: Box::new(left),
+                operator: op,
+                right: Box::new(right),
+            };
+            input = input5;
+        } else {
+            break;
+        }
+    }
+    
+    Ok((input, left))
+}
+
+// Parse concatenation expressions: ||
+fn parse_concat_expr(input: &str) -> IResult<&str, PropertyValue> {
+    let (mut input, mut left) = parse_additive_expr(input)?;
+    
+    loop {
+        let (input2, _) = multispace0(input)?;
+        
+        if input2.starts_with("||") {
+            let input3 = &input2[2..];
+            let (input4, _) = multispace0(input3)?;
+            let (input5, right) = parse_additive_expr(input4)?;
+            
+            left = PropertyValue::BinaryOp {
+                left: Box::new(left),
+                operator: "||".to_string(),
+                right: Box::new(right),
+            };
+            input = input5;
+        } else {
+            break;
+        }
+    }
+    
+    Ok((input, left))
+}
+
+// Main expression parser with full operator precedence
+fn parse_expression(input: &str) -> IResult<&str, PropertyValue> {
+    parse_concat_expr(input)
 }
 
 // Parses the UNWIND clause (e.g. UNWIND [1,2,3] AS x)
