@@ -178,8 +178,21 @@ def main():
         expected_type_issues=2
     )
     
-    # Test 8: Valid query with correct types (should pass with 0 issues)
-    print_test_header("Test 8: Valid Query - Correct Types")
+    # Test 8: Relationship property type checking (NOW WORKING!)
+    print_test_header("Test 8: Relationship Property Type Checking")
+    test_type_coercion(
+        schema,
+        """
+        MATCH (p:Person)-[r:WORKS_FOR]->(c:Company)
+        WHERE r.salary = 'high'
+        RETURN p, c
+        """,
+        "salary (FLOAT) on relationship WORKS_FOR compared with string 'high'",
+        expected_type_issues=1
+    )
+    
+    # Test 9: Valid query with correct types (should pass with 0 issues)
+    print_test_header("Test 9: Valid Query - Correct Types")
     print("\nTest: Valid query with matching types")
     query = """
     MATCH (p:Person)
@@ -215,6 +228,7 @@ def main():
     print("  ✓ BOOLEAN vs INTEGER mismatches")
     print("  ✓ INTEGER vs BOOLEAN mismatches")
     print("  ✓ FLOAT vs STRING mismatches")
+    print("  ✓ Relationship property type mismatches")
     print("  ✓ Multiple mismatches in one query")
     print()
 

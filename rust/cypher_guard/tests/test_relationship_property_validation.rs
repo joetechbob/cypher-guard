@@ -245,4 +245,52 @@ mod relationship_property_validation_tests {
             "Expected no type issues for correct mixed properties"
         );
     }
+
+    #[test]
+    fn test_relationship_property_type_mismatch_from_parsed_query() {
+        // This is an INTEGRATION test that parses a real Cypher query
+        // Unlike the other tests, this doesn't manually create QueryElements
+        use cypher_guard::parse_query;
+        use cypher_guard::validation::extract_query_elements;
+
+        let mut schema = DbSchema::new();
+        schema.add_label("Person").unwrap();
+        schema.add_label("Company").unwrap();
+
+        let salary_prop = DbSchemaProperty::new("salary", PropertyType::FLOAT);
+        schema
+            .add_relationship_property("WORKS_FOR", &salary_prop)
+            .unwrap();
+
+        let query =
+            "MATCH (p:Person)-[r:WORKS_FOR]->(c:Company) WHERE r.salary = 'high' RETURN p, c";
+
+        // Parse the query
+        let ast = parse_query(query).expect("Should parse successfully");
+
+        // Extract query elements (this is what the Python binding does)
+        let elements = extract_query_elements(&ast);
+
+        println!("DEBUG: Extracted elements:");
+        println!("  Variable relationship bindings: {:?}", elements.variable_relationship_bindings);
+        println!("  Property comparisons: {:?}", elements.property_comparisons);
+
+        let options = ValidationOptions {
+            type_checking: TypeCheckLevel::Strict,
+        };
+        let (errors, type_issues) =
+            validate_query_elements_with_options(&elements, &schema, &options);
+
+        // Should detect type mismatch: salary is FLOAT but compared with String
+        assert!(errors.is_empty(), "Should have no schema validation errors");
+        assert_eq!(
+            type_issues.len(),
+            1,
+            "Expected 1 type issue for relationship property type mismatch from parsed query. Got {} issues",
+            type_issues.len()
+        );
+        if !type_issues.is_empty() {
+            assert!(type_issues[0].message.contains("salary"));
+        }
+    }
 }
