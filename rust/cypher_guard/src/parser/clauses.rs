@@ -347,16 +347,6 @@ pub fn parse_basic_condition(input: &str) -> IResult<&str, ast::WhereCondition> 
         return Ok((rest, ast::WhereCondition::Not(Box::new(condition))));
     }
 
-    // Try to parse parenthesized condition
-    if let Ok((rest, _)) = tag::<&str, &str, nom::error::Error<&str>>("(")(input) {
-        let (rest, condition) = parse_where_expr(rest)?;
-        let (rest, _) = tag::<&str, &str, nom::error::Error<&str>>(")")(rest)?;
-        return Ok((
-            rest,
-            ast::WhereCondition::Parenthesized(Box::new(condition)),
-        ));
-    }
-
     // Try to parse as a comparison FIRST (which can include function calls in expressions)
     let comparison_result = (|| {
         // Parse left side as an expression
@@ -405,6 +395,19 @@ pub fn parse_basic_condition(input: &str) -> IResult<&str, ast::WhereCondition> 
 
     if let Ok(result) = comparison_result {
         return Ok(result);
+    }
+
+    // If comparison parsing failed, try to parse parenthesized WHERE condition
+    // (e.g., WHERE (a > 5 AND b < 10))
+    if let Ok((rest, _)) = tag::<&str, &str, nom::error::Error<&str>>("(")(input) {
+        if let Ok((rest, condition)) = parse_where_expr(rest) {
+            if let Ok((rest, _)) = tag::<&str, &str, nom::error::Error<&str>>(")")(rest) {
+                return Ok((
+                    rest,
+                    ast::WhereCondition::Parenthesized(Box::new(condition)),
+                ));
+            }
+        }
     }
 
     // If comparison parsing failed, try to parse as a standalone function call
@@ -741,6 +744,18 @@ fn parse_primary_expression(input: &str) -> IResult<&str, PropertyValue> {
             name,
             args: args.into_iter().map(PropertyValue::String).collect(),
         }),
+        // Try lists (e.g., [1, 2, 3])
+        map(
+            delimited(
+                char('['),
+                separated_list0(
+                    tuple((multispace0, char(','), multispace0)),
+                    parse_expression,
+                ),
+                char(']'),
+            ),
+            PropertyValue::List,
+        ),
         // Try parameters
         map(parameter, PropertyValue::Parameter),
         // Try property access (e.g., n.age)
