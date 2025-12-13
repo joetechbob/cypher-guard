@@ -691,6 +691,13 @@ fn extract_property_access_from_string(
         return;
     }
 
+    // Skip function calls (e.g., "nodes(p)", "length(p)")
+    // Function calls contain parentheses and should not be treated as variables
+    if trimmed.contains('(') && trimmed.contains(')') {
+        println!("DEBUG: Skipping function call: {}", trimmed);
+        return;
+    }
+
     // Simple pattern matching for property access: variable.property
     if let Some(dot_pos) = trimmed.find('.') {
         let variable = trimmed[..dot_pos].trim();
@@ -2199,5 +2206,91 @@ mod tests {
 
         // Should have no errors
         assert!(errors.is_empty(), "Valid allShortestPaths should not produce errors: {:?}", errors);
+    }
+
+    // === Path Function Validation Tests ===
+
+    #[test]
+    fn test_path_function_length_validation() {
+        // Test that length() function works with path variables
+        let mut schema = DbSchema::new();
+        schema.add_label("Person").unwrap();
+
+        let knows_rel = DbSchemaRelationshipPattern::new("Person", "Person", "KNOWS");
+        schema.add_relationship_pattern(knows_rel).unwrap();
+
+        let query_str = "MATCH p = (a:Person)-[:KNOWS*]-(b:Person) WHERE length(p) < 5 RETURN p";
+        let result = crate::parse_query(query_str);
+        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
+
+        let query = result.unwrap();
+        let elements = extract_query_elements(&query);
+        let errors = validate_query_elements(&elements, &schema);
+
+        // Should have no errors
+        assert!(errors.is_empty(), "length() function should not produce validation errors: {:?}", errors);
+    }
+
+    #[test]
+    fn test_path_function_nodes_validation() {
+        // Test that nodes() function works
+        let mut schema = DbSchema::new();
+        schema.add_label("Person").unwrap();
+
+        let knows_rel = DbSchemaRelationshipPattern::new("Person", "Person", "KNOWS");
+        schema.add_relationship_pattern(knows_rel).unwrap();
+
+        let query_str = "MATCH p = (a:Person)-[:KNOWS*]-(b:Person) RETURN nodes(p)";
+        let result = crate::parse_query(query_str);
+        assert!(result.is_ok());
+
+        let query = result.unwrap();
+        let elements = extract_query_elements(&query);
+        let errors = validate_query_elements(&elements, &schema);
+
+        // Should have no errors
+        assert!(errors.is_empty(), "nodes() function should not produce validation errors: {:?}", errors);
+    }
+
+    #[test]
+    fn test_path_function_relationships_validation() {
+        // Test that relationships() function works
+        let mut schema = DbSchema::new();
+        schema.add_label("Person").unwrap();
+
+        let knows_rel = DbSchemaRelationshipPattern::new("Person", "Person", "KNOWS");
+        schema.add_relationship_pattern(knows_rel).unwrap();
+
+        let query_str = "MATCH p = (a:Person)-[:KNOWS*]-(b:Person) RETURN relationships(p)";
+        let result = crate::parse_query(query_str);
+        assert!(result.is_ok());
+
+        let query = result.unwrap();
+        let elements = extract_query_elements(&query);
+        let errors = validate_query_elements(&elements, &schema);
+
+        // Should have no errors
+        assert!(errors.is_empty(), "relationships() function should not produce validation errors: {:?}", errors);
+    }
+
+    #[test]
+    fn test_path_functions_combined_validation() {
+        // Test combined path functions
+        let mut schema = DbSchema::new();
+        schema.add_label("Person").unwrap();
+
+        let knows_rel = DbSchemaRelationshipPattern::new("Person", "Person", "KNOWS");
+        schema.add_relationship_pattern(knows_rel).unwrap();
+
+        let query_str = "MATCH p = (a:Person)-[:KNOWS*]-(b:Person) WHERE length(p) <= 3 RETURN nodes(p), relationships(p), length(p)";
+        let result = crate::parse_query(query_str);
+        assert!(result.is_ok());
+
+        let query = result.unwrap();
+        let elements = extract_query_elements(&query);
+        let errors = validate_query_elements(&elements, &schema);
+
+        // Should have no errors
+        assert!(errors.is_empty(), "Combined path functions should not produce validation errors: {:?}", errors);
     }
 }

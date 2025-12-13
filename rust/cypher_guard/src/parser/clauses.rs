@@ -3878,10 +3878,39 @@ mod shortest_path_tests {
         let query = "MATCH shortestPath((a)-[*]-(b)) RETURN a, b";
         let result = parse_query(query);
         assert!(result.is_ok(), "Failed to parse without path variable: {:?}", result.err());
-        
+
         let query_ast = result.unwrap();
         let match_element = &query_ast.match_clauses[0].elements[0];
         assert_eq!(match_element.path_var, None);
         assert_eq!(match_element.path_function, Some(PathFunction::ShortestPath));
+    }
+
+    // Path function tests
+    #[test]
+    fn test_path_length_function() {
+        let query = "MATCH p = (a)-[:KNOWS*]-(b) WHERE length(p) < 5 RETURN p";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse path length function: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_nodes_function() {
+        let query = "MATCH p = (a)-[:KNOWS*]-(b) RETURN nodes(p)";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse nodes() function: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_relationships_function() {
+        let query = "MATCH p = (a)-[:KNOWS*]-(b) RETURN relationships(p)";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse relationships() function: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_path_functions_combined() {
+        let query = "MATCH p = (a)-[:KNOWS*]-(b) WHERE length(p) <= 3 RETURN nodes(p), relationships(p), length(p)";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse combined path functions: {:?}", result.err());
     }
 }
