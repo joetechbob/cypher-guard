@@ -11,7 +11,7 @@ use ::cypher_guard::{
     TypeCheckLevel as CoreTypeCheckLevel, TypeMismatchSeverity as CoreTypeMismatchSeverity,
     TypeIssue as CoreTypeIssue,
 };
-use ::cypher_guard::validation::{ValidationOptions as CoreValidationOptions, extract_query_elements, validate_query_elements_with_options as core_validate_with_options};
+use ::cypher_guard::validation::{ValidationOptions as CoreValidationOptions, extract_query_elements as core_extract_query_elements, validate_query_elements_with_options as core_validate_with_options};
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
@@ -1787,19 +1787,50 @@ pub fn check_syntax(py: Python, query: &str) -> PyResult<bool> {
 ///     >>> validate_cypher("MATCH (n:Person) RETURN n", schema_json)
 ///     []
 #[pyfunction]
-#[pyo3(text_signature = "(query, schema, /)")]
-pub fn validate_cypher(py: Python, query: &str, schema: DbSchema) -> PyResult<Vec<String>> {
-    // First check if the query can be parsed (syntax check)
-    match parse_query_rust(query) {
-        Ok(_) => {
-            // If parsing succeeds, get validation errors
-            Ok(get_cypher_validation_errors(query, &schema.inner))
-        }
+#[pyo3(signature = (query, schema, type_check_level=None), text_signature = "(query, schema, type_check_level=None, /)")]
+pub fn validate_cypher(
+    py: Python,
+    query: &str,
+    schema: DbSchema,
+    type_check_level: Option<TypeCheckLevel>,
+) -> PyResult<(Vec<String>, Vec<TypeIssue>)> {
+    // Default to Off if not specified
+    let level = type_check_level.unwrap_or(TypeCheckLevel::Off);
+
+    // Parse the query
+    let ast = match parse_query_rust(query) {
+        Ok(ast) => ast,
         Err(e) => {
-            // If parsing fails, raise syntax error
-            Err(convert_parsing_error(py, e))
+            return Err(convert_parsing_error(py, e));
         }
-    }
+    };
+
+    // Extract query elements
+    let elements = core_extract_query_elements(&ast);
+
+    // Create validation options
+    let options = CypherValidationOptions { type_checking: level };
+
+    // Validate with options
+    let (validation_errors, type_issues) = core_validate_with_options(
+        &elements,
+        &schema.inner,
+        &options.to_core(),
+    );
+
+    // Convert validation errors to strings
+    let error_messages: Vec<String> = validation_errors
+        .into_iter()
+        .map(|e| e.to_string())
+        .collect();
+
+    // Convert type issues to Python wrappers
+    let py_type_issues: Vec<TypeIssue> = type_issues
+        .iter()
+        .map(|issue| TypeIssue::from_core(issue))
+        .collect();
+
+    Ok((error_messages, py_type_issues))
 }
 
 /// Check if a Cypher query contains write operations (CREATE, MERGE, DELETE, SET, REMOVE).
@@ -1923,7 +1954,7 @@ pub fn validate_query_elements_with_options(
     };
     
     // Extract query elements from AST
-    let elements = extract_query_elements(&ast);
+    let elements = core_extract_query_elements(&ast);
     
     // Validate with options
     let (validation_errors, type_issues) = core_validate_with_options(
@@ -1945,6 +1976,110 @@ pub fn validate_query_elements_with_options(
         .collect();
     
     Ok((error_messages, py_type_issues))
+}
+
+/// Parse a Cypher query and return success/failure.
+///
+/// This is a lightweight function that only checks if a query can be parsed.
+/// It does NOT return the AST (which is complex), but you can use this to
+/// validate syntax before calling other functions.
+///
+/// Args:
+///     query (str): The Cypher query to parse
+///
+/// Returns:
+///     bool: True if parsing succeeded, False otherwise
+///
+/// Examples:
+///     >>> from cypher_guard import parse_query
+///     >>> parse_query("MATCH (n) RETURN n")
+///     True
+///     >>> parse_query("INVALID SYNTAX")
+///     False
+#[pyfunction]
+#[pyo3(text_signature = "(query, /)")]
+pub fn parse_query(query: &str) -> PyResult<bool> {
+    match parse_query_rust(query) {
+        Ok(_) => Ok(true),
+        Err(_) => Ok(false),
+    }
+}
+
+/// Extract query elements summary from a Cypher query.
+///
+/// This function parses the query and extracts information about the elements
+/// it contains (labels, relationship types, properties, variables).
+/// Returns a dictionary with the extracted information.
+///
+/// Args:
+///     query (str): The Cypher query to analyze
+///
+/// Returns:
+///     dict: Dictionary containing:
+///         - node_labels: List of node labels found
+///         - relationship_types: List of relationship types found
+///         - defined_variables: List of variables defined in the query
+///         - variable_node_bindings: Dict mapping variables to node labels
+///         - variable_relationship_bindings: Dict mapping variables to relationship types
+///
+/// Raises:
+///     ValueError: If the query cannot be parsed
+///
+/// Examples:
+///     >>> from cypher_guard import extract_query_elements
+///     >>> elements = extract_query_elements("MATCH (p:Person)-[r:KNOWS]->(f:Person) RETURN p, f")
+///     >>> elements['node_labels']
+///     ['Person']
+///     >>> elements['relationship_types']
+///     ['KNOWS']
+///     >>> elements['variable_node_bindings']
+///     {'p': 'Person', 'f': 'Person'}
+///     >>> elements['variable_relationship_bindings']
+///     {'r': 'KNOWS'}
+#[pyfunction]
+#[pyo3(text_signature = "(query, /)")]
+pub fn extract_query_elements(py: Python, query: &str) -> PyResult<PyObject> {
+    // Parse the query
+    let ast = match parse_query_rust(query) {
+        Ok(ast) => ast,
+        Err(e) => {
+            return Err(convert_parsing_error(py, e));
+        }
+    };
+
+    // Extract elements
+    let elements = core_extract_query_elements(&ast);
+
+    // Convert to Python dict
+    let dict = pyo3::types::PyDict::new(py);
+
+    // Add node labels (convert HashSet to list)
+    let node_labels: Vec<String> = elements.node_labels.iter().cloned().collect();
+    dict.set_item("node_labels", node_labels)?;
+
+    // Add relationship types
+    let rel_types: Vec<String> = elements.relationship_types.iter().cloned().collect();
+    dict.set_item("relationship_types", rel_types)?;
+
+    // Add defined variables
+    let defined_vars: Vec<String> = elements.defined_variables.iter().cloned().collect();
+    dict.set_item("defined_variables", defined_vars)?;
+
+    // Add variable node bindings (HashMap to dict)
+    let var_node_bindings = pyo3::types::PyDict::new(py);
+    for (var, label) in &elements.variable_node_bindings {
+        var_node_bindings.set_item(var, label)?;
+    }
+    dict.set_item("variable_node_bindings", var_node_bindings)?;
+
+    // Add variable relationship bindings
+    let var_rel_bindings = pyo3::types::PyDict::new(py);
+    for (var, rel_type) in &elements.variable_relationship_bindings {
+        var_rel_bindings.set_item(var, rel_type)?;
+    }
+    dict.set_item("variable_relationship_bindings", var_rel_bindings)?;
+
+    Ok(dict.into())
 }
 
 #[pymodule]
@@ -1985,6 +2120,8 @@ fn cypher_guard(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(is_write, m)?)?;
     m.add_function(wrap_pyfunction!(has_parser_errors, m)?)?;
     m.add_function(wrap_pyfunction!(validate_query_elements_with_options, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_query, m)?)?;
+    m.add_function(wrap_pyfunction!(extract_query_elements, m)?)?;
 
     // Expose error classes using the simpler approach from PyO3 docs
     m.add(

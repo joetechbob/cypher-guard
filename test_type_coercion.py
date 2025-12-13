@@ -178,16 +178,18 @@ def main():
         expected_type_issues=2
     )
     
-    # Test 8: Relationship property type checking (Pending)
+    # Test 8: Relationship property type checking (NOW WORKING!)
     print_test_header("Test 8: Relationship Property Type Checking")
-    print("\n⚠️  PENDING: Relationship property type checking")
-    print("Query: MATCH (p:Person)-[r:WORKS_FOR]->(c:Company)")
-    print("       WHERE r.salary = 'high'")
-    print("       RETURN p, c")
-    print("\nExpected: Detect FLOAT vs STRING mismatch on r.salary")
-    print("Actual: Not yet working in current build (0 type issues)")
-    print("Status: ⏳ Implementation in progress")
-    print("\nNote: Skipping this test until relationship tracking is complete...")
+    test_type_coercion(
+        schema,
+        """
+        MATCH (p:Person)-[r:WORKS_FOR]->(c:Company)
+        WHERE r.salary = 'high'
+        RETURN p, c
+        """,
+        "salary (FLOAT) on relationship WORKS_FOR compared with string 'high'",
+        expected_type_issues=1
+    )
     
     # Test 9: Valid query with correct types (should pass with 0 issues)
     print_test_header("Test 9: Valid Query - Correct Types")

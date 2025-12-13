@@ -271,9 +271,18 @@ mod relationship_property_validation_tests {
         // Extract query elements (this is what the Python binding does)
         let elements = extract_query_elements(&ast);
 
-        println!("DEBUG: Extracted elements:");
+        println!("\nDEBUG: Extracted elements:");
+        println!("  Node labels: {:?}", elements.node_labels);
+        println!("  Relationship types: {:?}", elements.relationship_types);
+        println!("  Defined variables: {:?}", elements.defined_variables);
+        println!("  Variable node bindings: {:?}", elements.variable_node_bindings);
         println!("  Variable relationship bindings: {:?}", elements.variable_relationship_bindings);
         println!("  Property comparisons: {:?}", elements.property_comparisons);
+
+        // Verify bindings were populated
+        assert!(elements.variable_relationship_bindings.contains_key("r"),
+            "Relationship binding for 'r' was not extracted! Bindings: {:?}",
+            elements.variable_relationship_bindings);
 
         let options = ValidationOptions {
             type_checking: TypeCheckLevel::Strict,
