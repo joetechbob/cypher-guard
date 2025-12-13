@@ -9,9 +9,10 @@ use nom::{
 };
 
 use crate::parser::ast::{
-    self, CallClause, CreateClause, MatchClause, MatchElement, MergeClause, OnCreateClause,
-    OnMatchClause, PropertyValue, Query, ReturnClause, SetClause, UnwindClause, UnwindExpression,
-    WhereClause, WithClause, WithExpression, WithItem,
+    self, CallClause, CreateClause, ForeachClause, ForeachExpression, ForeachUpdateClause,
+    MatchClause, MatchElement, MergeClause, OnCreateClause, OnMatchClause, PropertyValue, Query,
+    ReturnClause, SetClause, UnionQuery, UnwindClause, UnwindExpression, WhereClause, WithClause,
+    WithExpression, WithItem,
 };
 use crate::parser::patterns::*;
 use crate::parser::span::{offset_to_line_column, Spanned};
@@ -33,6 +34,7 @@ pub enum Clause {
     Delete(ast::DeleteClause),
     Remove(ast::RemoveClause),
     Set(Vec<ast::SetClause>),
+    Foreach(ast::ForeachClause),
 }
 
 // Parses a comma-separated list of match elements, stopping at clause boundaries
@@ -144,6 +146,9 @@ fn property_value_to_string(value: &PropertyValue) -> String {
                 .join(", ");
             format!("{}{{{}}}", property_value_to_string(base), props_str)
         }
+        PropertyValue::ExistsSubquery { query: _ } => "EXISTS { <query> }".to_string(),
+        PropertyValue::CollectSubquery { query: _ } => "COLLECT { <query> }".to_string(),
+        PropertyValue::CountSubquery { query: _ } => "COUNT { <query> }".to_string(),
     }
 }
 
@@ -350,6 +355,16 @@ pub fn parse_basic_condition(input: &str) -> IResult<&str, ast::WhereCondition> 
         let (rest, _) = multispace1(rest)?;
         let (rest, condition) = parse_basic_condition(rest)?;
         return Ok((rest, ast::WhereCondition::Not(Box::new(condition))));
+    }
+
+    // Try to parse EXISTS subquery (which is a boolean expression on its own)
+    if let Ok((rest, subquery_expr)) = parse_exists_subquery(input) {
+        // EXISTS is treated as a function call in WHERE conditions
+        return Ok((rest, ast::WhereCondition::Comparison {
+            left: subquery_expr,
+            operator: "=".to_string(),
+            right: ast::PropertyValue::Boolean(true),
+        }));
     }
 
     // Try to parse as a comparison FIRST (which can include function calls in expressions)
@@ -667,6 +682,8 @@ fn parse_subquery(input: &str) -> IResult<&str, Query> {
         delete_clauses: Vec::new(),
         remove_clauses: Vec::new(),
         set_clauses: Vec::new(),
+        foreach_clauses: Vec::new(),
+        union_queries: Vec::new(),
     };
 
     // Collect all clauses by type
@@ -685,6 +702,7 @@ fn parse_subquery(input: &str) -> IResult<&str, Query> {
             Clause::Delete(delete_clause) => query.delete_clauses.push(delete_clause.clone()),
             Clause::Remove(remove_clause) => query.remove_clauses.push(remove_clause.clone()),
             Clause::Set(set_clauses) => query.set_clauses.extend(set_clauses.clone()),
+            Clause::Foreach(foreach_clause) => query.foreach_clauses.push(foreach_clause.clone()),
             Clause::Query(_) => {
                 // Handle nested queries if needed
                 return Err(nom::Err::Error(nom::error::Error::new(
@@ -844,12 +862,67 @@ fn parse_list_comprehension(input: &str) -> IResult<&str, PropertyValue> {
     }))
 }
 
+// Parse EXISTS subquery: EXISTS { MATCH ... }
+fn parse_exists_subquery(input: &str) -> IResult<&str, PropertyValue> {
+    let (input, _) = tag_no_case("EXISTS")(input)?;
+    let (input, _) = multispace0(input)?;
+    let (input, _) = char('{')(input)?;
+    let (input, _) = multispace0(input)?;
+
+    let (input, query) = parse_subquery(input)?;
+
+    let (input, _) = multispace0(input)?;
+    let (input, _) = char('}')(input)?;
+
+    Ok((input, PropertyValue::ExistsSubquery {
+        query: Box::new(query),
+    }))
+}
+
+// Parse COLLECT subquery: COLLECT { MATCH ... RETURN ... }
+fn parse_collect_subquery(input: &str) -> IResult<&str, PropertyValue> {
+    let (input, _) = tag_no_case("COLLECT")(input)?;
+    let (input, _) = multispace0(input)?;
+    let (input, _) = char('{')(input)?;
+    let (input, _) = multispace0(input)?;
+
+    let (input, query) = parse_subquery(input)?;
+
+    let (input, _) = multispace0(input)?;
+    let (input, _) = char('}')(input)?;
+
+    Ok((input, PropertyValue::CollectSubquery {
+        query: Box::new(query),
+    }))
+}
+
+// Parse COUNT subquery: COUNT { MATCH ... }
+fn parse_count_subquery(input: &str) -> IResult<&str, PropertyValue> {
+    let (input, _) = tag_no_case("COUNT")(input)?;
+    let (input, _) = multispace0(input)?;
+    let (input, _) = char('{')(input)?;
+    let (input, _) = multispace0(input)?;
+
+    let (input, query) = parse_subquery(input)?;
+
+    let (input, _) = multispace0(input)?;
+    let (input, _) = char('}')(input)?;
+
+    Ok((input, PropertyValue::CountSubquery {
+        query: Box::new(query),
+    }))
+}
+
 // Parse a primary expression (atoms that can be used in binary operations)
 fn parse_primary_expression(input: &str) -> IResult<&str, PropertyValue> {
     let (input, _) = multispace0(input)?;
 
     alt((
-        // Try function calls first
+        // Try subquery expressions first (EXISTS, COLLECT, COUNT)
+        parse_exists_subquery,
+        parse_collect_subquery,
+        parse_count_subquery,
+        // Try function calls
         map(function_call, |(name, args)| PropertyValue::FunctionCall {
             name,
             args: args.into_iter().map(PropertyValue::String).collect(),
@@ -1222,6 +1295,99 @@ pub fn unwind_clause(input: &str) -> IResult<&str, UnwindClause> {
     )))
 }
 
+// Parses the FOREACH clause (e.g. FOREACH (x IN list | CREATE (n {prop: x})))
+pub fn foreach_clause(input: &str) -> IResult<&str, ForeachClause> {
+    let (input, _) = multispace0(input)?;
+    let (input, _) = tag_no_case("FOREACH")(input)?;
+    let (input, _) = multispace0(input)?;
+    let (input, _) = char('(')(input)?;
+    let (input, _) = multispace0(input)?;
+
+    // Parse the iteration variable
+    let (input, variable) = identifier(input)?;
+    let (input, _) = multispace1(input)?;
+    let (input, _) = tag_no_case("IN")(input)?;
+    let (input, _) = multispace1(input)?;
+
+    // Parse the expression to iterate over
+    let (input, expression) = if let Ok((input, param)) = parameter(input) {
+        (input, ForeachExpression::Parameter(param))
+    } else if let Ok((input, ast::PropertyValue::List(items))) = property_value(input) {
+        (input, ForeachExpression::List(items))
+    } else if let Ok((input, (name, args))) = function_call(input) {
+        let args = args.into_iter().map(ast::PropertyValue::String).collect();
+        (input, ForeachExpression::FunctionCall { name, args })
+    } else if let Ok((input, ident)) = identifier(input) {
+        (input, ForeachExpression::Identifier(ident.to_string()))
+    } else {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Tag,
+        )));
+    };
+
+    let (input, _) = multispace0(input)?;
+    let (input, _) = char('|')(input)?;
+    let (input, _) = multispace0(input)?;
+
+    // Parse update clauses inside FOREACH (CREATE, MERGE, SET, DELETE, REMOVE)
+    let mut clauses = Vec::new();
+    let mut input = input;
+
+    loop {
+        // Try to parse update clauses
+        let (input2, _) = multispace0(input)?;
+
+        // Check if we've reached the end of the FOREACH clause
+        if input2.starts_with(')') {
+            input = &input2[1..];
+            break;
+        }
+
+        // Try to parse each clause type
+        if let Ok((rest, create_cl)) = create_clause(input2) {
+            clauses.push(ForeachUpdateClause::Create(create_cl));
+            input = rest;
+        } else if let Ok((rest, merge_cl)) = merge_clause(input2) {
+            clauses.push(ForeachUpdateClause::Merge(merge_cl));
+            input = rest;
+        } else if let Ok((rest, set_clauses)) = standalone_set_clause(input2) {
+            // SET can return multiple clauses, add them all
+            for set_cl in set_clauses {
+                clauses.push(ForeachUpdateClause::Set(set_cl));
+            }
+            input = rest;
+        } else if let Ok((rest, delete_cl)) = delete_clause(input2) {
+            clauses.push(ForeachUpdateClause::Delete(delete_cl));
+            input = rest;
+        } else if let Ok((rest, remove_cl)) = remove_clause(input2) {
+            clauses.push(ForeachUpdateClause::Remove(remove_cl));
+            input = rest;
+        } else {
+            // No more clauses found
+            break;
+        }
+
+        // Consume optional comma between clauses
+        if let Ok((rest, _)) = tuple::<_, _, nom::error::Error<&str>, _>((
+            multispace0,
+            char(','),
+            multispace0
+        ))(input) {
+            input = rest;
+        }
+    }
+
+    Ok((
+        input,
+        ForeachClause {
+            variable: variable.to_string(),
+            expression,
+            clauses,
+        },
+    ))
+}
+
 // Parses the DELETE or DETACH DELETE clause (e.g. DELETE n, DETACH DELETE n, r)
 pub fn delete_clause(input: &str) -> IResult<&str, ast::DeleteClause> {
     let (input, _) = multispace0(input)?;
@@ -1416,6 +1582,10 @@ pub fn clause(input: &str) -> IResult<&str, Spanned<Clause>> {
             let start = offset(full_input, input);
             Spanned::new(Clause::Set(c), start)
         }),
+        map(foreach_clause, |c| {
+            let start = offset(full_input, input);
+            Spanned::new(Clause::Foreach(c), start)
+        }),
     ))(input)
 }
 
@@ -1442,14 +1612,8 @@ pub fn parse_query(input: &str) -> IResult<&str, Query> {
         }
     }
 
-    // Ensure we've consumed the entire input
+    // Skip whitespace and check for UNION before validating end of input
     let (rest, _) = multispace0(rest)?;
-    if !rest.is_empty() {
-        return Err(nom::Err::Error(nom::error::Error::new(
-            rest,
-            nom::error::ErrorKind::Verify,
-        )));
-    }
 
     // Validate clause order
     if let Err(_validation_error) = validate_clause_order(&clauses, input) {
@@ -1481,6 +1645,8 @@ pub fn parse_query(input: &str) -> IResult<&str, Query> {
         delete_clauses: Vec::new(),
         remove_clauses: Vec::new(),
         set_clauses: Vec::new(),
+        foreach_clauses: Vec::new(),
+        union_queries: Vec::new(),
     };
 
     for spanned_clause in clauses {
@@ -1497,10 +1663,52 @@ pub fn parse_query(input: &str) -> IResult<&str, Query> {
             Clause::Delete(delete_clause) => query.delete_clauses.push(delete_clause),
             Clause::Remove(remove_clause) => query.remove_clauses.push(remove_clause),
             Clause::Set(set_clauses) => query.set_clauses.extend(set_clauses),
+            Clause::Foreach(foreach_clause) => query.foreach_clauses.push(foreach_clause),
             Clause::Query(_) => {
                 // Handle nested queries if needed
             }
         }
+    }
+
+    // After parsing the main query, check for UNION clauses
+    let mut rest = rest;
+
+    while rest.to_uppercase().starts_with("UNION") {
+        // Determine if it's UNION or UNION ALL
+        let is_all = if rest.len() >= 9 && rest[..9].to_uppercase() == "UNION ALL" {
+            rest = &rest[9..];
+            true
+        } else if rest.len() >= 5 && rest[..5].to_uppercase() == "UNION" {
+            rest = &rest[5..];
+            false
+        } else {
+            break;
+        };
+
+        // Skip whitespace after UNION [ALL]
+        let (r, _) = multispace0(rest)?;
+        rest = r;
+
+        // Parse the next query recursively
+        let (r, union_query) = parse_query(rest)?;
+        rest = r;
+
+        query.union_queries.push(UnionQuery {
+            query: Box::new(union_query),
+            is_all,
+        });
+
+        // Skip trailing whitespace
+        let (r, _) = multispace0(rest)?;
+        rest = r;
+    }
+
+    // Ensure we've consumed the entire input (after handling all UNIONs)
+    if !rest.is_empty() {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            rest,
+            nom::error::ErrorKind::Verify,
+        )));
     }
 
     Ok((rest, query))
@@ -1550,7 +1758,7 @@ fn validate_clause_order(
                 ));
             }
 
-            // After MATCH - can have UNWIND, WHERE, WITH, RETURN, or more MATCH, or write operations (DELETE/REMOVE/SET)
+            // After MATCH - can have UNWIND, WHERE, WITH, RETURN, or more MATCH, or write operations (DELETE/REMOVE/SET/FOREACH)
             (ClauseOrderState::AfterMatch, Clause::Match(_) | Clause::OptionalMatch(_)) => {
                 ClauseOrderState::AfterMatch
             }
@@ -1562,11 +1770,11 @@ fn validate_clause_order(
                 ClauseOrderState::AfterWrite
             }
             (ClauseOrderState::AfterMatch, Clause::Call(_)) => ClauseOrderState::AfterCall,
-            (ClauseOrderState::AfterMatch, Clause::Delete(_) | Clause::Remove(_) | Clause::Set(_)) => {
+            (ClauseOrderState::AfterMatch, Clause::Delete(_) | Clause::Remove(_) | Clause::Set(_) | Clause::Foreach(_)) => {
                 ClauseOrderState::AfterWrite
             }
 
-            // After UNWIND - can have WHERE, WITH, RETURN, or writing clauses
+            // After UNWIND - can have WHERE, WITH, RETURN, or writing clauses (including FOREACH)
             (ClauseOrderState::AfterUnwind, Clause::Unwind(_)) => ClauseOrderState::AfterUnwind,
             (ClauseOrderState::AfterUnwind, Clause::Where(_)) => ClauseOrderState::AfterWhere,
             (ClauseOrderState::AfterUnwind, Clause::With(_)) => ClauseOrderState::AfterWith,
@@ -1575,11 +1783,11 @@ fn validate_clause_order(
                 ClauseOrderState::AfterWrite
             }
             (ClauseOrderState::AfterUnwind, Clause::Call(_)) => ClauseOrderState::AfterCall,
-            (ClauseOrderState::AfterUnwind, Clause::Delete(_) | Clause::Remove(_) | Clause::Set(_)) => {
+            (ClauseOrderState::AfterUnwind, Clause::Delete(_) | Clause::Remove(_) | Clause::Set(_) | Clause::Foreach(_)) => {
                 ClauseOrderState::AfterWrite
             }
 
-            // After WHERE - can have MATCH, WITH, RETURN, or more WHERE, or write operations
+            // After WHERE - can have MATCH, WITH, RETURN, or more WHERE, or write operations (including FOREACH)
             (ClauseOrderState::AfterWhere, Clause::Match(_) | Clause::OptionalMatch(_)) => {
                 ClauseOrderState::AfterMatch
             }
@@ -1591,11 +1799,11 @@ fn validate_clause_order(
                 ClauseOrderState::AfterWrite
             }
             (ClauseOrderState::AfterWhere, Clause::Call(_)) => ClauseOrderState::AfterCall,
-            (ClauseOrderState::AfterWhere, Clause::Delete(_) | Clause::Remove(_) | Clause::Set(_)) => {
+            (ClauseOrderState::AfterWhere, Clause::Delete(_) | Clause::Remove(_) | Clause::Set(_) | Clause::Foreach(_)) => {
                 ClauseOrderState::AfterWrite
             }
 
-            // After WITH - can have MATCH, UNWIND, WHERE, WITH, RETURN, or writing clauses
+            // After WITH - can have MATCH, UNWIND, WHERE, WITH, RETURN, or writing clauses (including FOREACH)
             // WITH creates a projection that allows starting a new reading phase
             (ClauseOrderState::AfterWith, Clause::Match(_) | Clause::OptionalMatch(_)) => {
                 ClauseOrderState::AfterMatch
@@ -1608,11 +1816,11 @@ fn validate_clause_order(
                 ClauseOrderState::AfterWrite
             }
             (ClauseOrderState::AfterWith, Clause::Call(_)) => ClauseOrderState::AfterCall,
-            (ClauseOrderState::AfterWith, Clause::Delete(_) | Clause::Remove(_) | Clause::Set(_)) => {
+            (ClauseOrderState::AfterWith, Clause::Delete(_) | Clause::Remove(_) | Clause::Set(_) | Clause::Foreach(_)) => {
                 ClauseOrderState::AfterWrite
             }
 
-            // After CALL - can have WHERE, WITH, RETURN, or writing clauses
+            // After CALL - can have WHERE, WITH, RETURN, or writing clauses (including FOREACH)
             (ClauseOrderState::AfterCall, Clause::Where(_)) => ClauseOrderState::AfterWhere,
             (ClauseOrderState::AfterCall, Clause::With(_)) => ClauseOrderState::AfterWith,
             (ClauseOrderState::AfterCall, Clause::Return(_)) => ClauseOrderState::AfterReturn,
@@ -1620,7 +1828,7 @@ fn validate_clause_order(
                 ClauseOrderState::AfterWrite
             }
             (ClauseOrderState::AfterCall, Clause::Call(_)) => ClauseOrderState::AfterCall,
-            (ClauseOrderState::AfterCall, Clause::Delete(_) | Clause::Remove(_) | Clause::Set(_)) => {
+            (ClauseOrderState::AfterCall, Clause::Delete(_) | Clause::Remove(_) | Clause::Set(_) | Clause::Foreach(_)) => {
                 ClauseOrderState::AfterWrite
             }
 
@@ -1654,11 +1862,11 @@ fn validate_clause_order(
                 ));
             }
 
-            // After write clause - can have more write clauses, RETURN, or WITH
+            // After write clause - can have more write clauses (including FOREACH), RETURN, or WITH
             (ClauseOrderState::AfterWrite, Clause::Create(_) | Clause::Merge(_)) => {
                 ClauseOrderState::AfterWrite
             }
-            (ClauseOrderState::AfterWrite, Clause::Delete(_) | Clause::Remove(_) | Clause::Set(_)) => {
+            (ClauseOrderState::AfterWrite, Clause::Delete(_) | Clause::Remove(_) | Clause::Set(_) | Clause::Foreach(_)) => {
                 ClauseOrderState::AfterWrite
             }
             (ClauseOrderState::AfterWrite, Clause::Return(_)) => ClauseOrderState::AfterReturn,
@@ -1724,6 +1932,7 @@ fn clause_name(clause: &Clause) -> &'static str {
         Clause::Delete(_) => "DELETE",
         Clause::Remove(_) => "REMOVE",
         Clause::Set(_) => "SET",
+        Clause::Foreach(_) => "FOREACH",
     }
 }
 
@@ -3912,5 +4121,307 @@ mod shortest_path_tests {
         let query = "MATCH p = (a)-[:KNOWS*]-(b) WHERE length(p) <= 3 RETURN nodes(p), relationships(p), length(p)";
         let result = parse_query(query);
         assert!(result.is_ok(), "Failed to parse combined path functions: {:?}", result.err());
+    }
+
+}
+
+#[cfg(test)]
+mod foreach_tests {
+    use crate::parse_query;
+
+    #[test]
+    fn test_foreach_with_list_set_wrapper() {
+        let query = "MATCH (n) FOREACH (x IN [1, 2, 3] | SET n.value = x)";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse FOREACH with list and SET: {:?}", result.err());
+
+        let query_ast = result.unwrap();
+        assert_eq!(query_ast.foreach_clauses.len(), 1);
+        assert_eq!(query_ast.foreach_clauses[0].variable, "x");
+        assert_eq!(query_ast.foreach_clauses[0].clauses.len(), 1);
+    }
+
+    #[test]
+    fn test_foreach_with_identifier_wrapper() {
+        let query = "MATCH p = (a)-[:KNOWS*]-(b) FOREACH (n IN nodes(p) | SET n.marked = true)";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse FOREACH with identifier: {:?}", result.err());
+
+        let query_ast = result.unwrap();
+        assert_eq!(query_ast.foreach_clauses.len(), 1);
+        assert_eq!(query_ast.foreach_clauses[0].variable, "n");
+    }
+
+    #[test]
+    fn test_foreach_with_parameter_wrapper() {
+        let query = "MATCH (n) FOREACH (x IN $list | SET n.prop = x)";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse FOREACH with parameter: {:?}", result.err());
+
+        let query_ast = result.unwrap();
+        assert_eq!(query_ast.foreach_clauses.len(), 1);
+        assert_eq!(query_ast.foreach_clauses[0].variable, "x");
+    }
+
+    #[test]
+    fn test_foreach_with_function_call_wrapper() {
+        let query = "MATCH (n) FOREACH (x IN range(1, 10) | SET n.value = x)";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse FOREACH with function call: {:?}", result.err());
+
+        let query_ast = result.unwrap();
+        assert_eq!(query_ast.foreach_clauses.len(), 1);
+        assert_eq!(query_ast.foreach_clauses[0].variable, "x");
+    }
+
+    #[test]
+    fn test_foreach_with_multiple_operations_wrapper() {
+        let query = "MATCH (n) FOREACH (x IN [1, 2, 3] | SET n.value = x, SET n.processed = true)";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse FOREACH with multiple operations: {:?}", result.err());
+
+        let query_ast = result.unwrap();
+        assert_eq!(query_ast.foreach_clauses.len(), 1);
+        // Should have both SET clauses
+        assert!(query_ast.foreach_clauses[0].clauses.len() >= 2,
+            "Expected at least 2 clauses, got {}", query_ast.foreach_clauses[0].clauses.len());
+    }
+
+    #[test]
+    fn test_foreach_real_world_path_marking_wrapper() {
+        let query = "MATCH p = shortestPath((a:Person)-[:KNOWS*]-(b:Person)) FOREACH (n IN nodes(p) | SET n.visited = true)";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse real-world FOREACH path marking: {:?}", result.err());
+
+        let query_ast = result.unwrap();
+        assert_eq!(query_ast.match_clauses.len(), 1);
+        assert_eq!(query_ast.foreach_clauses.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod union_tests {
+    use crate::parse_query;
+
+    #[test]
+    fn test_union_basic() {
+        let query = "MATCH (n:Person) RETURN n.name UNION MATCH (m:Company) RETURN m.name";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse basic UNION: {:?}", result.err());
+
+        let query_ast = result.unwrap();
+        assert_eq!(query_ast.union_queries.len(), 1);
+        assert_eq!(query_ast.union_queries[0].is_all, false);
+    }
+
+    #[test]
+    fn test_union_all() {
+        let query = "MATCH (n:Person) RETURN n.name UNION ALL MATCH (m:Company) RETURN m.name";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse UNION ALL: {:?}", result.err());
+
+        let query_ast = result.unwrap();
+        assert_eq!(query_ast.union_queries.len(), 1);
+        assert_eq!(query_ast.union_queries[0].is_all, true);
+    }
+
+    #[test]
+    fn test_multiple_unions() {
+        let query = "MATCH (n:Person) RETURN n.name UNION MATCH (m:Company) RETURN m.name UNION MATCH (p:Place) RETURN p.name";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse multiple UNIONs: {:?}", result.err());
+
+        let query_ast = result.unwrap();
+        // With recursive parsing, we get 1 union_query which itself has 1 union_query
+        assert_eq!(query_ast.union_queries.len(), 1);
+        // The first union query contains the second union
+        assert_eq!(query_ast.union_queries[0].query.union_queries.len(), 1);
+    }
+
+    #[test]
+    fn test_union_with_where() {
+        let query = "MATCH (n:Person) WHERE n.age > 30 RETURN n.name UNION MATCH (m:Person) WHERE m.age <= 30 RETURN m.name";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse UNION with WHERE: {:?}", result.err());
+
+        let query_ast = result.unwrap();
+        assert_eq!(query_ast.union_queries.len(), 1);
+        assert_eq!(query_ast.where_clauses.len(), 1);
+        // The union query also has a WHERE clause
+        assert_eq!(query_ast.union_queries[0].query.where_clauses.len(), 1);
+    }
+
+    #[test]
+    fn test_union_mixed() {
+        let query = "MATCH (n:Person) RETURN n.name UNION ALL MATCH (m:Company) RETURN m.name UNION MATCH (p:Place) RETURN p.name";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse mixed UNION/UNION ALL: {:?}", result.err());
+
+        let query_ast = result.unwrap();
+        // With recursive parsing, first query has UNION ALL to second, second has UNION to third
+        assert_eq!(query_ast.union_queries.len(), 1);
+        assert_eq!(query_ast.union_queries[0].is_all, true);
+        // The nested union is just UNION (not ALL)
+        assert_eq!(query_ast.union_queries[0].query.union_queries.len(), 1);
+        assert_eq!(query_ast.union_queries[0].query.union_queries[0].is_all, false);
+    }
+
+    #[test]
+    fn test_union_case_insensitive() {
+        let query = "MATCH (n:Person) RETURN n.name union MATCH (m:Company) RETURN m.name";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse case-insensitive UNION: {:?}", result.err());
+
+        let query_ast = result.unwrap();
+        assert_eq!(query_ast.union_queries.len(), 1);
+    }
+
+    #[test]
+    fn test_union_with_order_by() {
+        let query = "MATCH (n:Person) RETURN n.name UNION MATCH (m:Company) RETURN m.name";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse UNION: {:?}", result.err());
+
+        let query_ast = result.unwrap();
+        assert_eq!(query_ast.union_queries.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod subquery_expression_tests {
+    use crate::parse_query;
+    use crate::parser::ast::PropertyValue;
+
+    #[test]
+    fn test_exists_subquery_basic() {
+        let query = "MATCH (user:User) WHERE EXISTS { MATCH (user)-[:LIKES]->(item) } RETURN user";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse EXISTS subquery: {:?}", result.err());
+
+        let query_ast = result.unwrap();
+        assert_eq!(query_ast.match_clauses.len(), 1);
+        assert_eq!(query_ast.where_clauses.len(), 1);
+        assert_eq!(query_ast.return_clauses.len(), 1);
+    }
+
+    #[test]
+    fn test_exists_subquery_with_where() {
+        let query = "MATCH (user:User) WHERE EXISTS { MATCH (user)-[:LIKES]->(item) WHERE item.rating > 4 } RETURN user";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse EXISTS with WHERE: {:?}", result.err());
+
+        let query_ast = result.unwrap();
+        assert_eq!(query_ast.match_clauses.len(), 1);
+        assert_eq!(query_ast.where_clauses.len(), 1);
+    }
+
+    #[test]
+    fn test_collect_subquery_basic() {
+        let query = "MATCH (user:User) RETURN user.name, COLLECT { MATCH (user)-[:LIKES]->(item) RETURN item.name } AS liked_items";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse COLLECT subquery: {:?}", result.err());
+
+        let query_ast = result.unwrap();
+        assert_eq!(query_ast.match_clauses.len(), 1);
+        assert_eq!(query_ast.return_clauses.len(), 1);
+        // Should have 2 return items: user.name and the COLLECT subquery
+        assert_eq!(query_ast.return_clauses[0].items.len(), 2);
+    }
+
+    #[test]
+    fn test_collect_subquery_with_filter() {
+        let query = "MATCH (user:User) RETURN COLLECT { MATCH (user)-[:LIKES]->(item) WHERE item.category = 'book' RETURN item.title } AS books";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse COLLECT with filter: {:?}", result.err());
+
+        let query_ast = result.unwrap();
+        assert_eq!(query_ast.return_clauses.len(), 1);
+    }
+
+    #[test]
+    fn test_count_subquery_basic() {
+        let query = "MATCH (user:User) RETURN user.name, COUNT { MATCH (user)-[:LIKES]->(item) } AS like_count";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse COUNT subquery: {:?}", result.err());
+
+        let query_ast = result.unwrap();
+        assert_eq!(query_ast.match_clauses.len(), 1);
+        assert_eq!(query_ast.return_clauses.len(), 1);
+        assert_eq!(query_ast.return_clauses[0].items.len(), 2);
+    }
+
+    #[test]
+    fn test_count_subquery_with_where() {
+        let query = "MATCH (user:User) RETURN COUNT { MATCH (user)-[:LIKES]->(item) WHERE item.rating >= 4 } AS high_rated_count";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse COUNT with WHERE: {:?}", result.err());
+
+        let query_ast = result.unwrap();
+        assert_eq!(query_ast.return_clauses.len(), 1);
+    }
+
+    #[test]
+    fn test_nested_subquery_expressions() {
+        let query = "MATCH (user:User) WHERE EXISTS { MATCH (user)-[:FRIEND]->(friend) WHERE EXISTS { MATCH (friend)-[:LIKES]->(item) } } RETURN user";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse nested EXISTS: {:?}", result.err());
+
+        let query_ast = result.unwrap();
+        assert_eq!(query_ast.match_clauses.len(), 1);
+        assert_eq!(query_ast.where_clauses.len(), 1);
+    }
+
+    #[test]
+    fn test_case_insensitive_exists() {
+        let query = "MATCH (user:User) WHERE exists { MATCH (user)-[:LIKES]->(item) } RETURN user";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse lowercase exists: {:?}", result.err());
+
+        let query_ast = result.unwrap();
+        assert_eq!(query_ast.match_clauses.len(), 1);
+    }
+
+    #[test]
+    fn test_case_insensitive_collect() {
+        let query = "MATCH (user:User) RETURN collect { MATCH (user)-[:LIKES]->(item) RETURN item } AS items";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse lowercase collect: {:?}", result.err());
+
+        let query_ast = result.unwrap();
+        assert_eq!(query_ast.return_clauses.len(), 1);
+    }
+
+    #[test]
+    fn test_case_insensitive_count() {
+        let query = "MATCH (user:User) RETURN count { MATCH (user)-[:LIKES]->(item) } AS count";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse lowercase count: {:?}", result.err());
+
+        let query_ast = result.unwrap();
+        assert_eq!(query_ast.return_clauses.len(), 1);
+    }
+
+    #[test]
+    fn test_multiple_subquery_types() {
+        let query = "MATCH (user:User) WHERE EXISTS { MATCH (user)-[:VERIFIED]->() } RETURN user.name, COLLECT { MATCH (user)-[:LIKES]->(item) RETURN item.name } AS likes, COUNT { MATCH (user)-[:FRIEND]->(f) } AS friend_count";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse multiple subquery types: {:?}", result.err());
+
+        let query_ast = result.unwrap();
+        assert_eq!(query_ast.match_clauses.len(), 1);
+        assert_eq!(query_ast.where_clauses.len(), 1);
+        assert_eq!(query_ast.return_clauses.len(), 1);
+        // Should have 3 return items
+        assert_eq!(query_ast.return_clauses[0].items.len(), 3);
+    }
+
+    #[test]
+    fn test_subquery_with_optional_match() {
+        let query = "MATCH (user:User) RETURN COLLECT { OPTIONAL MATCH (user)-[:LIKES]->(item) RETURN item } AS items";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse COLLECT with OPTIONAL MATCH: {:?}", result.err());
+
+        let query_ast = result.unwrap();
+        assert_eq!(query_ast.return_clauses.len(), 1);
     }
 }

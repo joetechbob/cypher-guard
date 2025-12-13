@@ -12,6 +12,15 @@ pub struct Query {
     pub delete_clauses: Vec<DeleteClause>,
     pub remove_clauses: Vec<RemoveClause>,
     pub set_clauses: Vec<SetClause>,
+    pub foreach_clauses: Vec<ForeachClause>,
+    pub union_queries: Vec<UnionQuery>,  // UNION and UNION ALL queries
+}
+
+// UNION query combining multiple queries
+#[derive(Debug, PartialEq, Clone)]
+pub struct UnionQuery {
+    pub query: Box<Query>,
+    pub is_all: bool,  // true for UNION ALL, false for UNION
 }
 
 // RETURN clause (simple)
@@ -114,11 +123,21 @@ pub enum PatternElement {
     QuantifiedPathPattern(QuantifiedPathPattern),
 }
 
+// Label expression for Neo4j 5.x
+#[derive(Debug, PartialEq, Clone)]
+pub enum LabelExpression {
+    Single(String),                                         // :Person
+    Or(Box<LabelExpression>, Box<LabelExpression>),       // :Person|Company
+    And(Box<LabelExpression>, Box<LabelExpression>),      // :Person&Manager
+    Not(Box<LabelExpression>),                            // :!Deleted
+}
+
 // Node pattern
 #[derive(Debug, PartialEq, Clone)]
 pub struct NodePattern {
     pub variable: Option<String>,
-    pub label: Option<String>,
+    pub label: Option<String>,                             // Legacy single label
+    pub label_expression: Option<LabelExpression>,         // Neo4j 5.x label expressions
     pub properties: Option<Vec<Property>>,
 }
 
@@ -241,6 +260,16 @@ pub enum PropertyValue {
         base: Box<PropertyValue>,
         properties: Vec<MapProjectionItem>,
     },
+    // Subquery expressions
+    ExistsSubquery {
+        query: Box<Query>,
+    },
+    CollectSubquery {
+        query: Box<Query>,
+    },
+    CountSubquery {
+        query: Box<Query>,
+    },
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -355,4 +384,33 @@ pub struct RemoveClause {
 pub enum RemoveItem {
     Property { variable: String, property: String }, // REMOVE n.prop
     Label { variable: String, label: String },       // REMOVE n:Label
+}
+
+// FOREACH clause for iteration over lists
+#[derive(Debug, PartialEq, Clone)]
+pub struct ForeachClause {
+    pub variable: String,                    // The iteration variable (e.g., "x")
+    pub expression: ForeachExpression,       // The list to iterate over
+    pub clauses: Vec<ForeachUpdateClause>,   // The write operations to perform
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum ForeachExpression {
+    List(Vec<PropertyValue>),          // [1, 2, 3]
+    Identifier(String),                // someList
+    Parameter(String),                 // $list
+    FunctionCall {                     // nodes(p), range(1, 10)
+        name: String,
+        args: Vec<PropertyValue>,
+    },
+}
+
+// Clauses allowed inside FOREACH (write operations only)
+#[derive(Debug, PartialEq, Clone)]
+pub enum ForeachUpdateClause {
+    Create(CreateClause),
+    Merge(MergeClause),
+    Set(SetClause),
+    Delete(DeleteClause),
+    Remove(RemoveClause),
 }

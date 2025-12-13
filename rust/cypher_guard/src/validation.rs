@@ -202,6 +202,37 @@ fn extract_from_property_value(
     }
 }
 
+/// Helper function to extract all individual labels from a label expression
+fn extract_labels_from_expression(expr: &LabelExpression, labels: &mut Vec<String>) {
+    match expr {
+        LabelExpression::Single(label) => {
+            labels.push(label.clone());
+        }
+        LabelExpression::Or(left, right) | LabelExpression::And(left, right) => {
+            extract_labels_from_expression(left, labels);
+            extract_labels_from_expression(right, labels);
+        }
+        LabelExpression::Not(inner) => {
+            extract_labels_from_expression(inner, labels);
+        }
+    }
+}
+
+/// Helper function to get labels from a node pattern (handles both legacy and label expressions)
+fn get_node_labels(node: &NodePattern) -> Vec<String> {
+    let mut labels = Vec::new();
+
+    // Try label_expression first (Neo4j 5.x)
+    if let Some(label_expr) = &node.label_expression {
+        extract_labels_from_expression(label_expr, &mut labels);
+    } else if let Some(label) = &node.label {
+        // Fall back to legacy single label
+        labels.push(label.clone());
+    }
+
+    labels
+}
+
 /// Extract all elements from a parsed query that need validation
 pub fn extract_query_elements(query: &Query) -> QueryElements {
     let mut elements = QueryElements::new();
@@ -274,13 +305,16 @@ fn extract_from_match_element(element: &MatchElement, elements: &mut QueryElemen
                 if let Some(variable) = &node.variable {
                     elements.add_defined_variable(variable.clone());
 
-                    // Track variable to node label binding
-                    if let Some(label) = &node.label {
+                    // Track variable to node label binding (use first label from expression)
+                    let labels = get_node_labels(node);
+                    if let Some(label) = labels.first() {
                         elements.add_variable_node_binding(variable.clone(), label.clone());
                     }
                 }
 
-                if let Some(label) = &node.label {
+                // Extract all labels from label expression or single label
+                let labels = get_node_labels(node);
+                for label in &labels {
                     elements.add_node_label(label.clone());
 
                     // Extract properties from node pattern
@@ -335,13 +369,14 @@ fn extract_from_match_element(element: &MatchElement, elements: &mut QueryElemen
                             if let Some(variable) = &node.variable {
                                 elements.add_defined_variable(variable.clone());
                             }
-                            if let Some(label) = &node.label {
+                            let labels = get_node_labels(node);
+                            for label in &labels {
                                 elements.add_node_label(label.clone());
                             }
                             // Extract node properties
                             if let Some(props) = &node.properties {
                                 for prop in props {
-                                    if let Some(label) = &node.label {
+                                    for label in &labels {
                                         elements.add_node_property(label.clone(), prop.key.clone());
                                     }
                                 }
@@ -484,12 +519,13 @@ fn extract_from_where_condition(condition: &WhereCondition, elements: &mut Query
                                     if let Some(var) = &node.variable {
                                         elements.add_defined_variable(var.clone());
                                     }
-                                    if let Some(label) = &node.label {
+                                    let labels = get_node_labels(node);
+                                    for label in &labels {
                                         elements.add_node_label(label.clone());
                                     }
                                     if let Some(props) = &node.properties {
                                         for prop in props {
-                                            if let Some(label) = &node.label {
+                                            for label in &labels {
                                                 elements.add_node_property(label.clone(), prop.key.clone());
                                             }
                                             extract_from_property_value(&prop.value, elements, PropertyContext::Where);
@@ -782,8 +818,9 @@ pub fn validate_query_elements_with_options(
         for element in pattern_sequence {
             match element {
                 PatternElement::Node(node) => {
-                    if let Some(label) = &node.label {
-                        nodes.push(label.clone());
+                    let labels = get_node_labels(node);
+                    for label in labels {
+                        nodes.push(label);
                     }
                 }
                 PatternElement::Relationship(rel) => {
@@ -797,8 +834,9 @@ pub fn validate_query_elements_with_options(
                     for pattern_element in &qpp.pattern {
                         match pattern_element {
                             PatternElement::Node(node) => {
-                                if let Some(label) = &node.label {
-                                    nodes.push(label.clone());
+                                let labels = get_node_labels(node);
+                                for label in labels {
+                                    nodes.push(label);
                                 }
                             }
                             PatternElement::Relationship(rel) => {
@@ -1079,6 +1117,7 @@ mod tests {
                     pattern: vec![PatternElement::Node(NodePattern {
                         variable: Some("a".to_string()),
                         label: Some("Person".to_string()),
+                        label_expression: None,
                         properties: None,
                     })],
                 }],
@@ -1094,6 +1133,8 @@ mod tests {
             delete_clauses: vec![],
             remove_clauses: vec![],
             set_clauses: vec![],
+            foreach_clauses: vec![],
+            union_queries: vec![],
         };
 
         let elements = extract_query_elements(&query);
@@ -1113,6 +1154,7 @@ mod tests {
                     pattern: vec![PatternElement::Node(NodePattern {
                         variable: Some("a".to_string()),
                         label: Some("Person".to_string()),
+                        label_expression: None,
                         properties: None,
                     })],
                 }],
@@ -1134,6 +1176,8 @@ mod tests {
             delete_clauses: vec![],
             remove_clauses: vec![],
             set_clauses: vec![],
+            foreach_clauses: vec![],
+            union_queries: vec![],
         };
 
         let elements = extract_query_elements(&query);
@@ -1159,6 +1203,7 @@ mod tests {
                     pattern: vec![PatternElement::Node(NodePattern {
                         variable: Some("a".to_string()),
                         label: Some("Person".to_string()),
+                        label_expression: None,
                         properties: None,
                     })],
                 }],
@@ -1180,6 +1225,8 @@ mod tests {
             delete_clauses: vec![],
             remove_clauses: vec![],
             set_clauses: vec![],
+            foreach_clauses: vec![],
+            union_queries: vec![],
         };
 
         let elements = extract_query_elements(&query);
@@ -1206,6 +1253,7 @@ mod tests {
                     pattern: vec![PatternElement::Node(NodePattern {
                         variable: Some("a".to_string()),
                         label: Some("Person".to_string()),
+                        label_expression: None,
                         properties: None,
                     })],
                 }],
@@ -1230,6 +1278,8 @@ mod tests {
             delete_clauses: vec![],
             remove_clauses: vec![],
             set_clauses: vec![],
+            foreach_clauses: vec![],
+            union_queries: vec![],
         };
 
         let elements = extract_query_elements(&query);
@@ -1265,6 +1315,8 @@ mod tests {
             delete_clauses: vec![],
             remove_clauses: vec![],
             set_clauses: vec![],
+            foreach_clauses: vec![],
+            union_queries: vec![],
         };
         let elements = extract_query_elements(&query);
         assert!(elements.defined_variables.contains("x"));
@@ -1523,6 +1575,8 @@ mod tests {
             delete_clauses: vec![],
             remove_clauses: vec![],
             set_clauses: vec![],
+            foreach_clauses: vec![],
+            union_queries: vec![],
         };
         let elements = QueryElements::new();
         let schema = DbSchema::new();
@@ -1571,6 +1625,7 @@ mod tests {
                         PatternElement::Node(NodePattern {
                             variable: Some("a".to_string()),
                             label: Some("Person".to_string()),
+                        label_expression: None,
                             properties: None,
                         }),
                         PatternElement::Relationship(RelationshipPattern::Regular(
@@ -1588,6 +1643,7 @@ mod tests {
                         PatternElement::Node(NodePattern {
                             variable: Some("b".to_string()),
                             label: Some("Movie".to_string()),
+                        label_expression: None,
                             properties: None,
                         }),
                     ],
@@ -1604,6 +1660,8 @@ mod tests {
             delete_clauses: vec![],
             remove_clauses: vec![],
             set_clauses: vec![],
+            foreach_clauses: vec![],
+            union_queries: vec![],
         };
 
         let elements = extract_query_elements(&valid_query);
@@ -1624,6 +1682,7 @@ mod tests {
                         PatternElement::Node(NodePattern {
                             variable: Some("a".to_string()),
                             label: Some("Person".to_string()),
+                        label_expression: None,
                             properties: None,
                         }),
                         PatternElement::Relationship(RelationshipPattern::Regular(
@@ -1641,6 +1700,7 @@ mod tests {
                         PatternElement::Node(NodePattern {
                             variable: Some("b".to_string()),
                             label: Some("Movie".to_string()),
+                        label_expression: None,
                             properties: None,
                         }),
                     ],
@@ -1657,6 +1717,8 @@ mod tests {
             delete_clauses: vec![],
             remove_clauses: vec![],
             set_clauses: vec![],
+            foreach_clauses: vec![],
+            union_queries: vec![],
         };
 
         let elements = extract_query_elements(&invalid_query);
@@ -1689,6 +1751,7 @@ mod tests {
                 PatternElement::Node(NodePattern {
                     variable: Some("a".to_string()),
                     label: Some("Person".to_string()),
+                        label_expression: None,
                     properties: None,
                 }),
                 PatternElement::Relationship(RelationshipPattern::Regular(RelationshipDetails {
@@ -1704,6 +1767,7 @@ mod tests {
                 PatternElement::Node(NodePattern {
                     variable: Some("b".to_string()),
                     label: Some("Person".to_string()),
+                        label_expression: None,
                     properties: None,
                 }),
             ],
@@ -1732,6 +1796,8 @@ mod tests {
             delete_clauses: vec![],
             remove_clauses: vec![],
             set_clauses: vec![],
+            foreach_clauses: vec![],
+            union_queries: vec![],
         };
 
         let elements = extract_query_elements(&query);
@@ -1766,6 +1832,7 @@ mod tests {
                 PatternElement::Node(NodePattern {
                     variable: Some("a".to_string()),
                     label: Some("Person".to_string()),
+                        label_expression: None,
                     properties: None,
                 }),
                 PatternElement::Relationship(RelationshipPattern::Regular(RelationshipDetails {
@@ -1781,6 +1848,7 @@ mod tests {
                 PatternElement::Node(NodePattern {
                     variable: Some("b".to_string()),
                     label: Some("Person".to_string()),
+                        label_expression: None,
                     properties: None,
                 }),
             ],
@@ -1809,6 +1877,8 @@ mod tests {
             delete_clauses: vec![],
             remove_clauses: vec![],
             set_clauses: vec![],
+            foreach_clauses: vec![],
+            union_queries: vec![],
         };
 
         let elements = extract_query_elements(&query);
@@ -1842,6 +1912,7 @@ mod tests {
                 PatternElement::Node(NodePattern {
                     variable: Some("a".to_string()),
                     label: Some("Person".to_string()),
+                        label_expression: None,
                     properties: Some(vec![Property {
                         key: "name".to_string(),
                         value: PropertyValue::String("Alice".to_string()),
@@ -1863,6 +1934,7 @@ mod tests {
                 PatternElement::Node(NodePattern {
                     variable: Some("b".to_string()),
                     label: Some("Person".to_string()),
+                        label_expression: None,
                     properties: None,
                 }),
             ],
@@ -1891,6 +1963,8 @@ mod tests {
             delete_clauses: vec![],
             remove_clauses: vec![],
             set_clauses: vec![],
+            foreach_clauses: vec![],
+            union_queries: vec![],
         };
 
         let elements = extract_query_elements(&query);
@@ -1921,6 +1995,7 @@ mod tests {
                 PatternElement::Node(NodePattern {
                     variable: Some("a".to_string()),
                     label: Some("Person".to_string()),
+                        label_expression: None,
                     properties: None,
                 }),
                 PatternElement::Relationship(RelationshipPattern::Regular(RelationshipDetails {
@@ -1936,6 +2011,7 @@ mod tests {
                 PatternElement::Node(NodePattern {
                     variable: Some("b".to_string()),
                     label: Some("Person".to_string()),
+                        label_expression: None,
                     properties: None,
                 }),
             ],
@@ -1964,6 +2040,8 @@ mod tests {
             delete_clauses: vec![],
             remove_clauses: vec![],
             set_clauses: vec![],
+            foreach_clauses: vec![],
+            union_queries: vec![],
         };
 
         let elements = extract_query_elements(&query);
@@ -1987,6 +2065,7 @@ mod tests {
                 PatternElement::Node(NodePattern {
                     variable: Some("a".to_string()),
                     label: Some("Person".to_string()),
+                        label_expression: None,
                     properties: None,
                 }),
                 PatternElement::Relationship(RelationshipPattern::Regular(RelationshipDetails {
@@ -2002,6 +2081,7 @@ mod tests {
                 PatternElement::Node(NodePattern {
                     variable: Some("b".to_string()),
                     label: Some("Person".to_string()),
+                        label_expression: None,
                     properties: None,
                 }),
             ],
@@ -2030,6 +2110,8 @@ mod tests {
             delete_clauses: vec![],
             remove_clauses: vec![],
             set_clauses: vec![],
+            foreach_clauses: vec![],
+            union_queries: vec![],
         };
 
         let elements = extract_query_elements(&query);
@@ -2057,6 +2139,7 @@ mod tests {
                 PatternElement::Node(NodePattern {
                     variable: Some("a".to_string()),
                     label: Some("Person".to_string()),
+                        label_expression: None,
                     properties: None,
                 }),
                 PatternElement::Relationship(RelationshipPattern::Regular(RelationshipDetails {
@@ -2072,6 +2155,7 @@ mod tests {
                 PatternElement::Node(NodePattern {
                     variable: Some("b".to_string()),
                     label: Some("Person".to_string()),
+                        label_expression: None,
                     properties: None,
                 }),
                 PatternElement::Relationship(RelationshipPattern::Regular(RelationshipDetails {
@@ -2087,6 +2171,7 @@ mod tests {
                 PatternElement::Node(NodePattern {
                     variable: Some("c".to_string()),
                     label: Some("Company".to_string()),
+                        label_expression: None,
                     properties: None,
                 }),
             ],
@@ -2115,6 +2200,8 @@ mod tests {
             delete_clauses: vec![],
             remove_clauses: vec![],
             set_clauses: vec![],
+            foreach_clauses: vec![],
+            union_queries: vec![],
         };
 
         let elements = extract_query_elements(&query);
@@ -2292,5 +2379,153 @@ mod tests {
 
         // Should have no errors
         assert!(errors.is_empty(), "Combined path functions should not produce validation errors: {:?}", errors);
+    }
+
+    // === Label Expression Validation Tests (Neo4j 5.x) ===
+
+    #[test]
+    fn test_label_expression_or_validation() {
+        // Test OR label expression - both labels should be validated
+        let mut schema = DbSchema::new();
+        schema.add_label("Person").unwrap();
+        schema.add_label("Company").unwrap();
+
+        let query_str = "MATCH (n:Person|Company) RETURN n";
+        let result = crate::parse_query(query_str);
+        assert!(result.is_ok());
+
+        let query = result.unwrap();
+        let elements = extract_query_elements(&query);
+        let errors = validate_query_elements(&elements, &schema);
+
+        // Should have no errors - both labels exist
+        assert!(errors.is_empty(), "OR label expression with valid labels should have no errors: {:?}", errors);
+
+        // Verify both labels were extracted
+        assert!(elements.node_labels.contains("Person"));
+        assert!(elements.node_labels.contains("Company"));
+    }
+
+    #[test]
+    fn test_label_expression_and_validation() {
+        // Test AND label expression - both labels should be validated
+        let mut schema = DbSchema::new();
+        schema.add_label("Person").unwrap();
+        schema.add_label("Manager").unwrap();
+
+        let query_str = "MATCH (n:Person&Manager) RETURN n";
+        let result = crate::parse_query(query_str);
+        assert!(result.is_ok());
+
+        let query = result.unwrap();
+        let elements = extract_query_elements(&query);
+        let errors = validate_query_elements(&elements, &schema);
+
+        // Should have no errors - both labels exist
+        assert!(errors.is_empty(), "AND label expression with valid labels should have no errors: {:?}", errors);
+
+        // Verify both labels were extracted
+        assert!(elements.node_labels.contains("Person"));
+        assert!(elements.node_labels.contains("Manager"));
+    }
+
+    #[test]
+    fn test_label_expression_not_validation() {
+        // Test NOT label expression - negated label should still be validated
+        let mut schema = DbSchema::new();
+        schema.add_label("Deleted").unwrap();
+
+        let query_str = "MATCH (n:!Deleted) RETURN n";
+        let result = crate::parse_query(query_str);
+        assert!(result.is_ok());
+
+        let query = result.unwrap();
+        let elements = extract_query_elements(&query);
+        let errors = validate_query_elements(&elements, &schema);
+
+        // Should have no errors - label exists
+        assert!(errors.is_empty(), "NOT label expression with valid label should have no errors: {:?}", errors);
+
+        // Verify label was extracted
+        assert!(elements.node_labels.contains("Deleted"));
+    }
+
+    #[test]
+    fn test_label_expression_invalid_label() {
+        // Test that invalid labels in expressions are caught
+        let mut schema = DbSchema::new();
+        schema.add_label("Person").unwrap();
+        // Note: InvalidLabel is not added to schema
+
+        let query_str = "MATCH (n:Person|InvalidLabel) RETURN n";
+        let result = crate::parse_query(query_str);
+        assert!(result.is_ok());
+
+        let query = result.unwrap();
+        let elements = extract_query_elements(&query);
+        let errors = validate_query_elements(&elements, &schema);
+
+        // Should have an error for InvalidLabel
+        assert!(!errors.is_empty(), "Invalid label in OR expression should produce error");
+        let has_invalid_label_error = errors.iter().any(|e| {
+            matches!(e, CypherGuardValidationError::InvalidNodeLabel(label) if label == "InvalidLabel")
+        });
+        assert!(has_invalid_label_error, "Should have InvalidNodeLabel error");
+    }
+
+    #[test]
+    fn test_label_expression_with_properties() {
+        // Test that label expression with properties validates both label and properties
+        let mut schema = DbSchema::new();
+        schema.add_label("Person").unwrap();
+        schema.add_label("Company").unwrap();
+
+        let name_prop = DbSchemaProperty::new("name", PropertyType::STRING);
+        schema.add_node_property("Person", &name_prop).unwrap();
+        schema.add_node_property("Company", &name_prop).unwrap();
+
+        let query_str = "MATCH (n:Person|Company {name: 'Alice'}) RETURN n";
+        let result = crate::parse_query(query_str);
+        assert!(result.is_ok());
+
+        let query = result.unwrap();
+        let elements = extract_query_elements(&query);
+        let errors = validate_query_elements(&elements, &schema);
+
+        // Should have no errors - both labels exist and have the name property
+        assert!(errors.is_empty(), "Label expression with valid properties should have no errors: {:?}", errors);
+
+        // Verify properties were extracted for both labels
+        assert!(elements.node_properties.get("Person").unwrap().contains("name"));
+        assert!(elements.node_properties.get("Company").unwrap().contains("name"));
+    }
+
+    #[test]
+    fn test_label_expression_complex_pattern() {
+        // Test complex label expression in a full pattern
+        let mut schema = DbSchema::new();
+        schema.add_label("Person").unwrap();
+        schema.add_label("Company").unwrap();
+        schema.add_label("Organization").unwrap();
+
+        let works_for_rel = DbSchemaRelationshipPattern::new("Person", "Company", "WORKS_FOR");
+        schema.add_relationship_pattern(works_for_rel).unwrap();
+
+        let query_str = "MATCH (a:Person)-[:WORKS_FOR]->(b:Company|Organization) RETURN a, b";
+        let result = crate::parse_query(query_str);
+        assert!(result.is_ok());
+
+        let query = result.unwrap();
+        let elements = extract_query_elements(&query);
+        let errors = validate_query_elements(&elements, &schema);
+
+        // Should have no errors
+        assert!(errors.is_empty(), "Complex pattern with label expressions should have no errors: {:?}", errors);
+
+        // Verify all labels were extracted
+        assert!(elements.node_labels.contains("Person"));
+        assert!(elements.node_labels.contains("Company"));
+        assert!(elements.node_labels.contains("Organization"));
+        assert!(elements.relationship_types.contains("WORKS_FOR"));
     }
 }

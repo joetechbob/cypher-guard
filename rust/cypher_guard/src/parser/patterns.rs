@@ -8,7 +8,7 @@ use nom::{
 };
 
 use crate::parser::ast::{
-    Direction, MatchElement, NodePattern, PatternElement, QuantifiedPathPattern,
+    Direction, LabelExpression, MatchElement, NodePattern, PatternElement, QuantifiedPathPattern,
     RelationshipDetails, RelationshipPattern,
 };
 use crate::parser::clauses::where_clause;
@@ -16,17 +16,113 @@ use crate::parser::components::*;
 use crate::parser::components::{property_map, relationship_type};
 use crate::parser::utils::identifier;
 
+// Parse label expression with operator precedence: NOT > AND > OR
+// Example: :Person|Company&Manager means :Person|(:Company&Manager)
+fn parse_label_expression(input: &str) -> IResult<&str, LabelExpression> {
+    parse_label_or(input)
+}
+
+// Parse OR expressions (lowest precedence)
+fn parse_label_or(input: &str) -> IResult<&str, LabelExpression> {
+    let (mut input, mut left) = parse_label_and(input)?;
+
+    loop {
+        // Try to parse | operator
+        let (input2, _) = multispace0(input)?;
+        if let Ok((input3, _)) = char::<_, nom::error::Error<&str>>('|')(input2) {
+            let (input4, _) = multispace0(input3)?;
+            let (input5, right) = parse_label_and(input4)?;
+            left = LabelExpression::Or(Box::new(left), Box::new(right));
+            input = input5;
+        } else {
+            break;
+        }
+    }
+
+    Ok((input, left))
+}
+
+// Parse AND expressions (higher precedence than OR)
+fn parse_label_and(input: &str) -> IResult<&str, LabelExpression> {
+    let (mut input, mut left) = parse_label_not(input)?;
+
+    loop {
+        // Try to parse & operator
+        let (input2, _) = multispace0(input)?;
+        if let Ok((input3, _)) = char::<_, nom::error::Error<&str>>('&')(input2) {
+            let (input4, _) = multispace0(input3)?;
+            let (input5, right) = parse_label_not(input4)?;
+            left = LabelExpression::And(Box::new(left), Box::new(right));
+            input = input5;
+        } else {
+            break;
+        }
+    }
+
+    Ok((input, left))
+}
+
+// Parse NOT expressions and single labels (highest precedence)
+fn parse_label_not(input: &str) -> IResult<&str, LabelExpression> {
+    let (input, _) = multispace0(input)?;
+
+    // Try to parse NOT (!)
+    if let Ok((input2, _)) = char::<_, nom::error::Error<&str>>('!')(input) {
+        let (input3, expr) = parse_label_primary(input2)?;
+        return Ok((input3, LabelExpression::Not(Box::new(expr))));
+    }
+
+    // Otherwise parse a primary label
+    parse_label_primary(input)
+}
+
+// Parse primary label (identifier or parenthesized expression)
+fn parse_label_primary(input: &str) -> IResult<&str, LabelExpression> {
+    let (input, _) = multispace0(input)?;
+
+    // Try parenthesized expression
+    if let Ok((input2, _)) = char::<_, nom::error::Error<&str>>('(')(input) {
+        let (input3, _) = multispace0(input2)?;
+        let (input4, expr) = parse_label_expression(input3)?;
+        let (input5, _) = multispace0(input4)?;
+        let (input6, _) = char::<_, nom::error::Error<&str>>(')')(input5)?;
+        return Ok((input6, expr));
+    }
+
+    // Parse single label identifier
+    let (input, label) = identifier(input)?;
+    Ok((input, LabelExpression::Single(label.to_string())))
+}
+
 pub fn node_pattern(input: &str) -> IResult<&str, NodePattern> {
     match char::<&str, nom::error::Error<&str>>('(')(input) {
         Ok((input, _)) => {
             let (input, variable) = opt(identifier)(input)?;
-            let (input, label) = opt(preceded(char(':'), identifier))(input)?;
+
+            // Try to parse label expression after ':'
+            let (input, label_opt, label_expr_opt) = if let Ok((input2, _)) = char::<_, nom::error::Error<&str>>(':')(input) {
+                // Parse the label expression
+                let (input3, label_expr) = parse_label_expression(input2)?;
+
+                // For backward compatibility, if it's a single label, also populate the label field
+                let label = match &label_expr {
+                    LabelExpression::Single(s) => Some(s.clone()),
+                    _ => None,
+                };
+
+                (input3, label, Some(label_expr))
+            } else {
+                (input, None, None)
+            };
+
             let (input, _) = multispace0(input)?;
             let (input, properties) = opt(property_map)(input)?;
             let (input, _) = char(')')(input)?;
+
             let result = NodePattern {
                 variable: variable.map(|s| s.to_string()),
-                label: label.map(|s| s.to_string()),
+                label: label_opt,
+                label_expression: label_expr_opt,
                 properties,
             };
             Ok((input, result))
@@ -970,6 +1066,216 @@ mod tests {
             assert_eq!(qpp.pattern.len(), 3); // Node, Relationship, Node
         } else {
             panic!("Expected quantified path pattern");
+        }
+    }
+
+    // Label Expression Tests - Neo4j 5.x syntax
+
+    #[test]
+    fn test_label_expression_single() {
+        let input = "(a:Person)";
+        let (_, node) = node_pattern(input).unwrap();
+        assert_eq!(node.variable, Some("a".to_string()));
+        assert_eq!(node.label, Some("Person".to_string()));
+        assert!(node.label_expression.is_some());
+        if let Some(LabelExpression::Single(label)) = node.label_expression {
+            assert_eq!(label, "Person");
+        } else {
+            panic!("Expected single label expression");
+        }
+    }
+
+    #[test]
+    fn test_label_expression_or() {
+        let input = "(a:Person|Company)";
+        let (_, node) = node_pattern(input).unwrap();
+        assert_eq!(node.variable, Some("a".to_string()));
+        assert_eq!(node.label, None); // Complex expressions don't populate legacy field
+        assert!(node.label_expression.is_some());
+        if let Some(LabelExpression::Or(left, right)) = node.label_expression {
+            if let LabelExpression::Single(l) = *left {
+                assert_eq!(l, "Person");
+            } else {
+                panic!("Expected left to be Single(Person)");
+            }
+            if let LabelExpression::Single(r) = *right {
+                assert_eq!(r, "Company");
+            } else {
+                panic!("Expected right to be Single(Company)");
+            }
+        } else {
+            panic!("Expected OR label expression");
+        }
+    }
+
+    #[test]
+    fn test_label_expression_and() {
+        let input = "(a:Person&Manager)";
+        let (_, node) = node_pattern(input).unwrap();
+        assert_eq!(node.variable, Some("a".to_string()));
+        assert_eq!(node.label, None);
+        assert!(node.label_expression.is_some());
+        if let Some(LabelExpression::And(left, right)) = node.label_expression {
+            if let LabelExpression::Single(l) = *left {
+                assert_eq!(l, "Person");
+            } else {
+                panic!("Expected left to be Single(Person)");
+            }
+            if let LabelExpression::Single(r) = *right {
+                assert_eq!(r, "Manager");
+            } else {
+                panic!("Expected right to be Single(Manager)");
+            }
+        } else {
+            panic!("Expected AND label expression");
+        }
+    }
+
+    #[test]
+    fn test_label_expression_not() {
+        let input = "(a:!Deleted)";
+        let (_, node) = node_pattern(input).unwrap();
+        assert_eq!(node.variable, Some("a".to_string()));
+        assert_eq!(node.label, None);
+        assert!(node.label_expression.is_some());
+        if let Some(LabelExpression::Not(inner)) = node.label_expression {
+            if let LabelExpression::Single(l) = *inner {
+                assert_eq!(l, "Deleted");
+            } else {
+                panic!("Expected inner to be Single(Deleted)");
+            }
+        } else {
+            panic!("Expected NOT label expression");
+        }
+    }
+
+    #[test]
+    fn test_label_expression_complex_precedence() {
+        // Test: :Person|Company&Manager should parse as :Person|(:Company&Manager)
+        // because AND has higher precedence than OR
+        let input = "(a:Person|Company&Manager)";
+        let (_, node) = node_pattern(input).unwrap();
+        assert!(node.label_expression.is_some());
+        if let Some(LabelExpression::Or(left, right)) = node.label_expression {
+            // Left should be Person
+            if let LabelExpression::Single(l) = *left {
+                assert_eq!(l, "Person");
+            } else {
+                panic!("Expected left to be Single(Person)");
+            }
+            // Right should be Company&Manager
+            if let LabelExpression::And(left_and, right_and) = *right {
+                if let LabelExpression::Single(l) = *left_and {
+                    assert_eq!(l, "Company");
+                } else {
+                    panic!("Expected Company in AND");
+                }
+                if let LabelExpression::Single(r) = *right_and {
+                    assert_eq!(r, "Manager");
+                } else {
+                    panic!("Expected Manager in AND");
+                }
+            } else {
+                panic!("Expected right to be AND expression");
+            }
+        } else {
+            panic!("Expected OR label expression");
+        }
+    }
+
+    #[test]
+    fn test_label_expression_with_parentheses() {
+        // Test: :(Person|Company)&Manager should parse as (:Person|:Company)&:Manager
+        let input = "(a:(Person|Company)&Manager)";
+        let (_, node) = node_pattern(input).unwrap();
+        assert!(node.label_expression.is_some());
+        if let Some(LabelExpression::And(left, right)) = node.label_expression {
+            // Left should be (Person|Company)
+            if let LabelExpression::Or(left_or, right_or) = *left {
+                if let LabelExpression::Single(l) = *left_or {
+                    assert_eq!(l, "Person");
+                } else {
+                    panic!("Expected Person in OR");
+                }
+                if let LabelExpression::Single(r) = *right_or {
+                    assert_eq!(r, "Company");
+                } else {
+                    panic!("Expected Company in OR");
+                }
+            } else {
+                panic!("Expected left to be OR expression");
+            }
+            // Right should be Manager
+            if let LabelExpression::Single(r) = *right {
+                assert_eq!(r, "Manager");
+            } else {
+                panic!("Expected right to be Single(Manager)");
+            }
+        } else {
+            panic!("Expected AND label expression");
+        }
+    }
+
+    #[test]
+    fn test_label_expression_not_with_and() {
+        let input = "(a:Person&!Deleted)";
+        let (_, node) = node_pattern(input).unwrap();
+        assert!(node.label_expression.is_some());
+        if let Some(LabelExpression::And(left, right)) = node.label_expression {
+            if let LabelExpression::Single(l) = *left {
+                assert_eq!(l, "Person");
+            } else {
+                panic!("Expected left to be Single(Person)");
+            }
+            if let LabelExpression::Not(inner) = *right {
+                if let LabelExpression::Single(d) = *inner {
+                    assert_eq!(d, "Deleted");
+                } else {
+                    panic!("Expected NOT inner to be Single(Deleted)");
+                }
+            } else {
+                panic!("Expected right to be NOT expression");
+            }
+        } else {
+            panic!("Expected AND label expression");
+        }
+    }
+
+    #[test]
+    fn test_label_expression_in_match_clause() {
+        let input = "(a:Person|Company)-[:WORKS_FOR]->(b:Company)";
+        let (_, pattern) = pattern_element_sequence(input, true).unwrap();
+        assert_eq!(pattern.len(), 3); // Node, Relationship, Node
+
+        // Check first node has OR expression
+        if let PatternElement::Node(node) = &pattern[0] {
+            assert!(node.label_expression.is_some());
+            if let Some(LabelExpression::Or(_, _)) = &node.label_expression {
+                // Expected OR expression
+            } else {
+                panic!("Expected OR label expression in first node");
+            }
+        } else {
+            panic!("Expected node in pattern");
+        }
+
+        // Check second node has simple label
+        if let PatternElement::Node(node) = &pattern[2] {
+            assert_eq!(node.label, Some("Company".to_string()));
+        } else {
+            panic!("Expected node in pattern");
+        }
+    }
+
+    #[test]
+    fn test_label_expression_with_properties() {
+        let input = "(a:Person|Company {name: 'Alice'})";
+        let (_, node) = node_pattern(input).unwrap();
+        assert!(node.label_expression.is_some());
+        assert!(node.properties.is_some());
+        if let Some(props) = node.properties {
+            assert_eq!(props.len(), 1);
+            assert_eq!(props[0].key, "name");
         }
     }
 }
