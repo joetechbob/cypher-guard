@@ -803,9 +803,35 @@ fn parse_primary_expression(input: &str) -> IResult<&str, PropertyValue> {
     ))(input)
 }
 
+// Parse exponentiation expressions: ^
+fn parse_exponentiation_expr(input: &str) -> IResult<&str, PropertyValue> {
+    let (mut input, mut left) = parse_primary_expression(input)?;
+    
+    loop {
+        let (input2, _) = multispace0(input)?;
+        
+        if input2.starts_with('^') {
+            let input3 = &input2[1..];
+            let (input4, _) = multispace0(input3)?;
+            let (input5, right) = parse_primary_expression(input4)?;
+            
+            left = PropertyValue::BinaryOp {
+                left: Box::new(left),
+                operator: "^".to_string(),
+                right: Box::new(right),
+            };
+            input = input5;
+        } else {
+            break;
+        }
+    }
+    
+    Ok((input, left))
+}
+
 // Parse multiplicative expressions: *, /, %
 fn parse_multiplicative_expr(input: &str) -> IResult<&str, PropertyValue> {
-    let (mut input, mut left) = parse_primary_expression(input)?;
+    let (mut input, mut left) = parse_exponentiation_expr(input)?;
     
     loop {
         let (input2, _) = multispace0(input)?;
@@ -817,7 +843,7 @@ fn parse_multiplicative_expr(input: &str) -> IResult<&str, PropertyValue> {
             map(char('%'), |c| c.to_string()),
         ))(input2) {
             let (input4, _) = multispace0(input3)?;
-            let (input5, right) = parse_primary_expression(input4)?;
+            let (input5, right) = parse_exponentiation_expr(input4)?;
             
             left = PropertyValue::BinaryOp {
                 left: Box::new(left),
@@ -1206,7 +1232,7 @@ fn validate_clause_order(
         let (line, column) = offset_to_line_column(full_input, spanned_clause.start);
 
         state = match (state, clause) {
-            // Initial state - only reading clauses allowed
+            // Initial state - reading clauses or RETURN allowed
             (ClauseOrderState::Initial, Clause::Match(_) | Clause::OptionalMatch(_)) => {
                 ClauseOrderState::AfterMatch
             }
@@ -1215,6 +1241,7 @@ fn validate_clause_order(
                 ClauseOrderState::AfterWrite
             }
             (ClauseOrderState::Initial, Clause::Call(_)) => ClauseOrderState::AfterCall,
+            (ClauseOrderState::Initial, Clause::Return(_)) => ClauseOrderState::AfterReturn,
             (ClauseOrderState::Initial, _) => {
                 return Err(CypherGuardParsingError::invalid_clause_order(
                     "query start",
