@@ -787,9 +787,64 @@ fn parse_primary_expression(input: &str) -> IResult<&str, PropertyValue> {
     ))(input)
 }
 
+// Parse postfix expressions: list[0], list[1..3], etc.
+fn parse_postfix_expression(input: &str) -> IResult<&str, PropertyValue> {
+    let (mut input, mut base) = parse_primary_expression(input)?;
+
+    loop {
+        let (input2, _) = multispace0(input)?;
+
+        // Check for bracket notation
+        if input2.starts_with('[') {
+            let input3 = &input2[1..];
+            let (input4, _) = multispace0(input3)?;
+
+            // Try to parse slice first (has ..)
+            if let Ok((input5, start_opt)) = opt(parse_expression)(input4) {
+                let (input6, _) = multispace0(input5)?;
+                if input6.starts_with("..") {
+                    let input7 = &input6[2..];
+                    let (input8, _) = multispace0(input7)?;
+                    let (input9, end_opt) = opt(parse_expression)(input8)?;
+                    let (input10, _) = multispace0(input9)?;
+                    if input10.starts_with(']') {
+                        let input11 = &input10[1..];
+                        base = PropertyValue::SliceAccess {
+                            base: Box::new(base),
+                            start: start_opt.map(Box::new),
+                            end: end_opt.map(Box::new),
+                        };
+                        input = input11;
+                        continue;
+                    }
+                }
+            }
+
+            // Otherwise, try index access
+            if let Ok((input5, index)) = parse_expression(input4) {
+                let (input6, _) = multispace0(input5)?;
+                if input6.starts_with(']') {
+                    let input7 = &input6[1..];
+                    base = PropertyValue::IndexAccess {
+                        base: Box::new(base),
+                        index: Box::new(index),
+                    };
+                    input = input7;
+                    continue;
+                }
+            }
+        }
+
+        // No more postfix operations
+        break;
+    }
+
+    Ok((input, base))
+}
+
 // Parse exponentiation expressions: ^
 fn parse_exponentiation_expr(input: &str) -> IResult<&str, PropertyValue> {
-    let (mut input, mut left) = parse_primary_expression(input)?;
+    let (mut input, mut left) = parse_postfix_expression(input)?;
     
     loop {
         let (input2, _) = multispace0(input)?;
@@ -797,7 +852,7 @@ fn parse_exponentiation_expr(input: &str) -> IResult<&str, PropertyValue> {
         if input2.starts_with('^') {
             let input3 = &input2[1..];
             let (input4, _) = multispace0(input3)?;
-            let (input5, right) = parse_primary_expression(input4)?;
+            let (input5, right) = parse_postfix_expression(input4)?;
             
             left = PropertyValue::BinaryOp {
                 left: Box::new(left),
