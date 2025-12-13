@@ -1,6 +1,6 @@
 # Cypher-Guard: Neo4j Coverage Analysis
 
-**Status**: 426/426 tests passing (100%) ✅
+**Status**: 434/434 tests passing (100%) ✅
 **Date**: 2025-12-13 (Updated)
 **Goal**: Achieve comprehensive Neo4j Cypher coverage
 
@@ -152,17 +152,22 @@
 - **Example**: `MATCH ((a)-[:KNOWS]->(b)){1,3}` fully validated
 - **Tests**: Basic, invalid relationships, properties, unbounded, zero-or-more, complex patterns
 
-### Priority 3: Advanced Path Features (MEDIUM)
+### Priority 3: Advanced Path Features (✅ PARTIALLY COMPLETED!)
 
 #### Shortest Path
-- [ ] `shortestPath()`: `MATCH p = shortestPath((a)-[*]-(b))`
-- [ ] `allShortestPaths()`
-- **Priority**: MEDIUM - Specialized graph algorithms
+- [x] `shortestPath()`: `MATCH p = shortestPath((a)-[*]-(b))` ✅
+- [x] `allShortestPaths()` ✅
+- **Status**: COMPLETED - December 13, 2025
+- **Examples**:
+  - `MATCH p = shortestPath((a:Person)-[*]-(b:Person)) RETURN p`
+  - `MATCH p = allShortestPaths((a)-[:KNOWS*]->(b)) RETURN p`
+  - Bare quantifiers supported: `-[*]-` (any relationship type)
+- **Tests**: 8 new tests (5 parser + 3 validation)
 
 #### Named Paths
 - [x] Path variables: `MATCH p = (a)-[*]-(b)` ✅ (basic support)
 - [ ] Path functions: `length(p)`, `nodes(p)`, `relationships(p)`
-- **Priority**: MEDIUM - Path analysis
+- **Priority**: MEDIUM - Path analysis (remaining work)
 
 ### Priority 4: FOREACH (LOW-MEDIUM)
 
@@ -226,13 +231,13 @@
 
 ## Test Coverage by Category
 
-### Test Distribution (426 Total Tests)
+### Test Distribution (434 Total Tests)
 - **test_priority1_features.rs**: 52 tests - Advanced features, pattern predicates
 - **test_comprehensive_queries.rs**: 38 tests - Edge cases, CASE expressions
 - **test_agent_queries.rs**: 10 tests - Real-world queries
 - **test_user_query.rs**: 1 test - User query validation
-- **parser/clauses.rs**: 159 tests - Comprehensive parser coverage (+18 for DELETE/REMOVE/SET)
-- **validation.rs**: 23 tests - Validation logic (+6 for QPP validation) ✨ NEW!
+- **parser/clauses.rs**: 164 tests - Parser coverage (+5 for shortestPath) ✨ NEW!
+- **validation.rs**: 26 tests - Validation logic (+3 for shortestPath validation) ✨ NEW!
 - **validation_typecheck_tests.rs**: ~100 tests - Type checking (Off/Warnings/Strict)
 - **types.rs**: 4 tests - Type system
 - **errors.rs**: ~39 tests - Error handling
@@ -256,10 +261,10 @@
 2. ✅ Implement validation logic for quantified relationships
 3. ✅ Test edge cases (unbounded, optional quantifiers)
 
-### Phase 3: Advanced Patterns (If Needed)
-1. `shortestPath()` and `allShortestPaths()`
-2. Path functions: `length()`, `nodes()`, `relationships()`
-3. FOREACH clause
+### Phase 3: Advanced Path Features (✅ PARTIALLY COMPLETED!)
+1. ✅ `shortestPath()` and `allShortestPaths()` - COMPLETED!
+2. ⏳ Path functions: `length()`, `nodes()`, `relationships()` - Remaining
+3. ⏳ FOREACH clause - Remaining
 
 ### Phase 4: Query Composition (If Needed)
 1. UNION and UNION ALL
@@ -268,21 +273,22 @@
 
 ## Performance Benchmarks
 
-- **Current**: 426 tests in 0.01s (excellent performance)
+- **Current**: 434 tests in 0.01s (excellent performance)
 - **Parser efficiency**: Fast nom-based parser with minimal backtracking
 - **Memory**: Lean AST structure
 - **Target**: Maintain <0.05s for 500+ tests
 
 ## Success Metrics
 
-- ✅ **Current**: 426/426 tests (100% pass rate)
+- ✅ **Current**: 434/434 tests (100% pass rate)
 - ✅ **Pattern Predicates**: Fully implemented
 - ✅ **Expression Operators**: Complete coverage
 - ✅ **Write Operations**: DELETE, REMOVE, SET all implemented
 - ✅ **QPP Validation**: Fully implemented with comprehensive tests
+- ✅ **Shortest Path**: shortestPath() and allShortestPaths() fully implemented
 - 🎯 **Target**: Maintain 100% pass rate as features grow
 - 🎯 **Agent query success**: >95% for real-world patterns
-- 🎯 **Parse speed**: <0.05s for 500+ tests (currently 0.01s for 426 tests)
+- 🎯 **Parse speed**: <0.05s for 500+ tests (currently 0.01s for 434 tests)
 
 ## Documentation Links
 
@@ -294,12 +300,19 @@
 
 ## Recent Accomplishments 🎉
 
-### December 13, 2025 (Latest)
+### December 13, 2025 (Latest - Priority 3)
+- ✅ **Shortest Path Functions**: `shortestPath()` and `allShortestPaths()` fully implemented
+- ✅ **Bare Quantifiers**: Support for `-[*]-` (any relationship type) in path queries
+- ✅ **Test Coverage**: Increased from 426 to 434 tests (+8 comprehensive path function tests)
+- ✅ **AST Enhancement**: Added PathFunction enum to MatchElement
+- ✅ **Parser Enhancement**: Case-insensitive path function names
+- ✅ **Validation**: Full schema validation for shortest path patterns
+
+### December 13, 2025 (Priority 1 & 2)
 - ✅ **Write Operations Complete**: DELETE, DETACH DELETE, REMOVE, standalone SET all implemented
-- ✅ **Test Coverage**: Increased from 402 to 420 tests (+18 comprehensive write operation tests)
-- ✅ **Clause Ordering**: Updated state machine to handle all write operations
+- ✅ **QPP Validation**: Comprehensive validation for Quantified Path Patterns
+- ✅ **Test Coverage Growth**: 402 → 420 → 426 → 434 tests
 - ✅ **Full Query Support**: MATCH + WHERE + write operations working seamlessly
-- ✅ **Combined Operations**: Can chain multiple write operations (SET + DELETE)
 
 ### December 13, 2025 (Earlier)
 - ✅ **Pattern Predicates in WHERE**: Full AST, parser, and validation support
