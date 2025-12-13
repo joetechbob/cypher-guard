@@ -86,6 +86,14 @@ pub struct PathProperty {
 pub struct MatchElement {
     pub path_var: Option<String>,
     pub pattern: Vec<PatternElement>,
+    pub path_function: Option<PathFunction>,
+}
+
+// Path functions like shortestPath() and allShortestPaths()
+#[derive(Debug, PartialEq, Clone)]
+pub enum PathFunction {
+    ShortestPath,
+    AllShortestPaths,
 }
 
 // Quantified path pattern details

@@ -1067,7 +1067,6 @@ mod tests {
         let query = Query {
             match_clauses: vec![MatchClause {
                 elements: vec![MatchElement {
-                    path_function: None,
                     path_var: Some("a".to_string()),
                     pattern: vec![PatternElement::Node(NodePattern {
                         variable: Some("a".to_string()),
@@ -1101,7 +1100,6 @@ mod tests {
         let query = Query {
             match_clauses: vec![MatchClause {
                 elements: vec![MatchElement {
-                    path_function: None,
                     path_var: Some("a".to_string()),
                     pattern: vec![PatternElement::Node(NodePattern {
                         variable: Some("a".to_string()),
@@ -1147,7 +1145,6 @@ mod tests {
         let query = Query {
             match_clauses: vec![MatchClause {
                 elements: vec![MatchElement {
-                    path_function: None,
                     path_var: Some("a".to_string()),
                     pattern: vec![PatternElement::Node(NodePattern {
                         variable: Some("a".to_string()),
@@ -1194,7 +1191,6 @@ mod tests {
         let query = Query {
             match_clauses: vec![MatchClause {
                 elements: vec![MatchElement {
-                    path_function: None,
                     path_var: Some("a".to_string()),
                     pattern: vec![PatternElement::Node(NodePattern {
                         variable: Some("a".to_string()),
@@ -1558,7 +1554,6 @@ mod tests {
         let valid_query = Query {
             match_clauses: vec![MatchClause {
                 elements: vec![MatchElement {
-                    path_function: None,
                     path_var: None,
                     pattern: vec![
                         PatternElement::Node(NodePattern {
@@ -1611,7 +1606,6 @@ mod tests {
         let invalid_query = Query {
             match_clauses: vec![MatchClause {
                 elements: vec![MatchElement {
-                    path_function: None,
                     path_var: None,
                     pattern: vec![
                         PatternElement::Node(NodePattern {
@@ -1709,7 +1703,6 @@ mod tests {
         let query = Query {
             match_clauses: vec![MatchClause {
                 elements: vec![MatchElement {
-                    path_function: None,
                     path_var: None,
                     pattern: vec![PatternElement::QuantifiedPathPattern(qpp)],
                 }],
@@ -1786,7 +1779,6 @@ mod tests {
         let query = Query {
             match_clauses: vec![MatchClause {
                 elements: vec![MatchElement {
-                    path_function: None,
                     path_var: None,
                     pattern: vec![PatternElement::QuantifiedPathPattern(qpp)],
                 }],
@@ -1868,7 +1860,6 @@ mod tests {
         let query = Query {
             match_clauses: vec![MatchClause {
                 elements: vec![MatchElement {
-                    path_function: None,
                     path_var: None,
                     pattern: vec![PatternElement::QuantifiedPathPattern(qpp)],
                 }],
@@ -1941,7 +1932,6 @@ mod tests {
         let query = Query {
             match_clauses: vec![MatchClause {
                 elements: vec![MatchElement {
-                    path_function: None,
                     path_var: None,
                     pattern: vec![PatternElement::QuantifiedPathPattern(qpp)],
                 }],
@@ -2007,7 +1997,6 @@ mod tests {
         let query = Query {
             match_clauses: vec![MatchClause {
                 elements: vec![MatchElement {
-                    path_function: None,
                     path_var: None,
                     pattern: vec![PatternElement::QuantifiedPathPattern(qpp)],
                 }],
@@ -2092,7 +2081,6 @@ mod tests {
         let query = Query {
             match_clauses: vec![MatchClause {
                 elements: vec![MatchElement {
-                    path_function: None,
                     path_var: None,
                     pattern: vec![PatternElement::QuantifiedPathPattern(qpp)],
                 }],
@@ -2124,80 +2112,5 @@ mod tests {
         assert!(elements.node_labels.contains("Company"));
         assert!(elements.relationship_types.contains("KNOWS"));
         assert!(elements.relationship_types.contains("WORKS_AT"));
-    }
-
-    // === shortestPath() Validation Tests ===
-
-    #[test]
-    fn test_shortest_path_validation() {
-        // Test that shortestPath patterns are validated correctly
-        let mut schema = DbSchema::new();
-        schema.add_label("Person").unwrap();
-
-        let knows_rel = DbSchemaRelationshipPattern::new("Person", "Person", "KNOWS");
-        schema.add_relationship_pattern(knows_rel).unwrap();
-
-        // Parse a query with shortestPath
-        let query_str = "MATCH p = shortestPath((a:Person)-[:KNOWS*]-(b:Person)) RETURN p";
-        let result = crate::parse_query(query_str);
-        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
-
-        let query = result.unwrap();
-        let elements = extract_query_elements(&query);
-        let errors = validate_query_elements(&elements, &schema);
-
-        // Should have no errors - valid shortestPath
-        assert!(errors.is_empty(), "Valid shortestPath should not produce errors: {:?}", errors);
-
-        // Verify extraction worked
-        assert!(elements.node_labels.contains("Person"));
-        assert!(elements.relationship_types.contains("KNOWS"));
-    }
-
-    #[test]
-    fn test_shortest_path_invalid_relationship() {
-        // Test that invalid relationships in shortestPath are caught
-        let mut schema = DbSchema::new();
-        schema.add_label("Person").unwrap();
-
-        let knows_rel = DbSchemaRelationshipPattern::new("Person", "Person", "KNOWS");
-        schema.add_relationship_pattern(knows_rel).unwrap();
-
-        // Parse a query with invalid relationship type
-        let query_str = "MATCH p = shortestPath((a:Person)-[:INVALID*]-(b:Person)) RETURN p";
-        let result = crate::parse_query(query_str);
-        assert!(result.is_ok());
-
-        let query = result.unwrap();
-        let elements = extract_query_elements(&query);
-        let errors = validate_query_elements(&elements, &schema);
-
-        // Should have error for invalid relationship type
-        assert!(!errors.is_empty(), "Invalid relationship in shortestPath should produce errors");
-        assert!(
-            errors.iter().any(|e| matches!(e, CypherGuardValidationError::InvalidRelationshipType(_))),
-            "Should have InvalidRelationshipType error"
-        );
-    }
-
-    #[test]
-    fn test_all_shortest_paths_validation() {
-        // Test allShortestPaths validation
-        let mut schema = DbSchema::new();
-        schema.add_label("Person").unwrap();
-
-        let knows_rel = DbSchemaRelationshipPattern::new("Person", "Person", "KNOWS");
-        schema.add_relationship_pattern(knows_rel).unwrap();
-
-        let query_str = "MATCH p = allShortestPaths((a:Person)-[:KNOWS*]-(b:Person)) RETURN p";
-        let result = crate::parse_query(query_str);
-        assert!(result.is_ok());
-
-        let query = result.unwrap();
-        let elements = extract_query_elements(&query);
-        let errors = validate_query_elements(&elements, &schema);
-
-        // Should have no errors
-        assert!(errors.is_empty(), "Valid allShortestPaths should not produce errors: {:?}", errors);
     }
 }

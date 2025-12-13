@@ -3814,3 +3814,74 @@ mod tests {
         assert_eq!(query.delete_clauses.len(), 1);
     }
 }
+
+#[cfg(test)]
+mod shortest_path_tests {
+    use crate::parse_query;
+    use crate::parser::ast::PathFunction;
+
+    #[test]
+    fn test_shortest_path_basic() {
+        let query = "MATCH p = shortestPath((a:Person)-[*]-(b:Person)) WHERE a.name = 'Alice' AND b.name = 'Bob' RETURN p";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
+        
+        let query_ast = result.unwrap();
+        assert_eq!(query_ast.match_clauses.len(), 1);
+        
+        let match_clause = &query_ast.match_clauses[0];
+        assert_eq!(match_clause.elements.len(), 1);
+        
+        let match_element = &match_clause.elements[0];
+        assert_eq!(match_element.path_var, Some("p".to_string()));
+        assert_eq!(match_element.path_function, Some(PathFunction::ShortestPath));
+    }
+
+    #[test]
+    fn test_all_shortest_paths() {
+        let query = "MATCH p = allShortestPaths((a:Person)-[*]-(b:Person)) RETURN p";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
+        
+        let query_ast = result.unwrap();
+        assert_eq!(query_ast.match_clauses.len(), 1);
+        
+        let match_clause = &query_ast.match_clauses[0];
+        let match_element = &match_clause.elements[0];
+        assert_eq!(match_element.path_function, Some(PathFunction::AllShortestPaths));
+    }
+
+    #[test]
+    fn test_shortest_path_with_relationship_type() {
+        let query = "MATCH p = shortestPath((a)-[:KNOWS*]->(b)) RETURN p";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
+        
+        let query_ast = result.unwrap();
+        let match_element = &query_ast.match_clauses[0].elements[0];
+        assert_eq!(match_element.path_function, Some(PathFunction::ShortestPath));
+    }
+
+    #[test]
+    fn test_shortest_path_case_insensitive() {
+        let query = "MATCH p = SHORTESTPATH((a)-[*]-(b)) RETURN p";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse (case insensitive): {:?}", result.err());
+        
+        let query_ast = result.unwrap();
+        let match_element = &query_ast.match_clauses[0].elements[0];
+        assert_eq!(match_element.path_function, Some(PathFunction::ShortestPath));
+    }
+
+    #[test]
+    fn test_shortest_path_without_path_variable() {
+        let query = "MATCH shortestPath((a)-[*]-(b)) RETURN a, b";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse without path variable: {:?}", result.err());
+        
+        let query_ast = result.unwrap();
+        let match_element = &query_ast.match_clauses[0].elements[0];
+        assert_eq!(match_element.path_var, None);
+        assert_eq!(match_element.path_function, Some(PathFunction::ShortestPath));
+    }
+}

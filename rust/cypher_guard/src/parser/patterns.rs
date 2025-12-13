@@ -44,7 +44,7 @@ pub fn relationship_details(input: &str) -> IResult<&str, RelationshipDetails> {
         variable, input
     );
 
-    // Try to parse as variable length relationship first
+    // Try to parse as variable length relationship first (e.g., :TYPE*)
     let (input, rel_type_quantifier_optional) =
         if let Ok((input, (rel_type, quantifier, is_optional))) =
             variable_length_relationship(input)
@@ -54,6 +54,13 @@ pub fn relationship_details(input: &str) -> IResult<&str, RelationshipDetails> {
                 rel_type, quantifier, is_optional
             );
             (input, (Some(rel_type), Some(quantifier), is_optional))
+        } else if let Ok((input, (quantifier, is_optional))) = quantifier(input) {
+            // Handle bare quantifier without relationship type (e.g., *)
+            println!(
+                "Parsed bare quantifier: {:?}, optional: {}",
+                quantifier, is_optional
+            );
+            (input, (None, Some(quantifier), is_optional))
         } else {
             // Fall back to regular relationship type
             let (input, rel_type) = opt(relationship_type)(input)?;
@@ -299,20 +306,50 @@ pub fn pattern_element_sequence(
 }
 
 pub fn match_element(input: &str) -> IResult<&str, MatchElement> {
+    use crate::parser::ast::PathFunction;
+    use nom::bytes::complete::tag_no_case;
+
     let (input, path_var) = opt(terminated(
         identifier,
         tuple((multispace0, char('='), multispace0)),
     ))(input)?;
+
+    // Try to parse path functions: shortestPath() or allShortestPaths()
+    let (input, path_function) = if let Ok((input, _)) = tag_no_case::<&str, &str, nom::error::Error<&str>>("shortestPath")(input) {
+        let (input, _) = multispace0(input)?;
+        let (input, _) = char('(')(input)?;
+        let (input, _) = multispace0(input)?;
+        (input, Some(PathFunction::ShortestPath))
+    } else if let Ok((input, _)) = tag_no_case::<&str, &str, nom::error::Error<&str>>("allShortestPaths")(input) {
+        let (input, _) = multispace0(input)?;
+        let (input, _) = char('(')(input)?;
+        let (input, _) = multispace0(input)?;
+        (input, Some(PathFunction::AllShortestPaths))
+    } else {
+        (input, None)
+    };
+
     let (input, pattern) = pattern_element_sequence(input, true)?;
+
+    // If we parsed a path function, we need to consume the closing parenthesis
+    let input = if path_function.is_some() {
+        let (input, _) = multispace0(input)?;
+        let (input, _) = char(')')(input)?;
+        input
+    } else {
+        input
+    };
+
     println!(
-        "[match_element] After pattern_element_sequence: pattern={:?}, input='{}'",
-        pattern, input
+        "[match_element] After pattern_element_sequence: pattern={:?}, path_function={:?}, input='{}'",
+        pattern, path_function, input
     );
     Ok((
         input,
         MatchElement {
             path_var: path_var.map(|s| s.to_string()),
             pattern,
+            path_function,
         },
     ))
 }
