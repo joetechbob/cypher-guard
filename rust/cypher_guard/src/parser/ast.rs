@@ -13,6 +13,7 @@ pub struct Query {
     pub remove_clauses: Vec<RemoveClause>,
     pub set_clauses: Vec<SetClause>,
     pub foreach_clauses: Vec<ForeachClause>,
+    pub load_csv_clauses: Vec<LoadCsvClause>,
     pub union_queries: Vec<UnionQuery>,  // UNION and UNION ALL queries
 }
 
@@ -413,4 +414,14 @@ pub enum ForeachUpdateClause {
     Set(SetClause),
     Delete(DeleteClause),
     Remove(RemoveClause),
+}
+
+// LOAD CSV clause for importing data from CSV files
+#[derive(Debug, PartialEq, Clone)]
+pub struct LoadCsvClause {
+    pub url: String,                        // The URL or file path to the CSV
+    pub variable: String,                   // The variable to bind each row to (AS variable)
+    pub with_headers: bool,                 // true for LOAD CSV WITH HEADERS
+    pub field_terminator: Option<String>,   // Custom field separator (FIELDTERMINATOR)
+    pub periodic_commit: Option<u64>,       // USING PERIODIC COMMIT (deprecated but still valid)
 }

@@ -1134,6 +1134,7 @@ mod tests {
             remove_clauses: vec![],
             set_clauses: vec![],
             foreach_clauses: vec![],
+            load_csv_clauses: vec![],
             union_queries: vec![],
         };
 
@@ -1177,6 +1178,7 @@ mod tests {
             remove_clauses: vec![],
             set_clauses: vec![],
             foreach_clauses: vec![],
+            load_csv_clauses: vec![],
             union_queries: vec![],
         };
 
@@ -1226,6 +1228,7 @@ mod tests {
             remove_clauses: vec![],
             set_clauses: vec![],
             foreach_clauses: vec![],
+            load_csv_clauses: vec![],
             union_queries: vec![],
         };
 
@@ -1279,6 +1282,7 @@ mod tests {
             remove_clauses: vec![],
             set_clauses: vec![],
             foreach_clauses: vec![],
+            load_csv_clauses: vec![],
             union_queries: vec![],
         };
 
@@ -1316,6 +1320,7 @@ mod tests {
             remove_clauses: vec![],
             set_clauses: vec![],
             foreach_clauses: vec![],
+            load_csv_clauses: vec![],
             union_queries: vec![],
         };
         let elements = extract_query_elements(&query);
@@ -1576,6 +1581,7 @@ mod tests {
             remove_clauses: vec![],
             set_clauses: vec![],
             foreach_clauses: vec![],
+            load_csv_clauses: vec![],
             union_queries: vec![],
         };
         let elements = QueryElements::new();
@@ -1661,6 +1667,7 @@ mod tests {
             remove_clauses: vec![],
             set_clauses: vec![],
             foreach_clauses: vec![],
+            load_csv_clauses: vec![],
             union_queries: vec![],
         };
 
@@ -1718,6 +1725,7 @@ mod tests {
             remove_clauses: vec![],
             set_clauses: vec![],
             foreach_clauses: vec![],
+            load_csv_clauses: vec![],
             union_queries: vec![],
         };
 
@@ -1797,6 +1805,7 @@ mod tests {
             remove_clauses: vec![],
             set_clauses: vec![],
             foreach_clauses: vec![],
+            load_csv_clauses: vec![],
             union_queries: vec![],
         };
 
@@ -1878,6 +1887,7 @@ mod tests {
             remove_clauses: vec![],
             set_clauses: vec![],
             foreach_clauses: vec![],
+            load_csv_clauses: vec![],
             union_queries: vec![],
         };
 
@@ -1964,6 +1974,7 @@ mod tests {
             remove_clauses: vec![],
             set_clauses: vec![],
             foreach_clauses: vec![],
+            load_csv_clauses: vec![],
             union_queries: vec![],
         };
 
@@ -2041,6 +2052,7 @@ mod tests {
             remove_clauses: vec![],
             set_clauses: vec![],
             foreach_clauses: vec![],
+            load_csv_clauses: vec![],
             union_queries: vec![],
         };
 
@@ -2111,6 +2123,7 @@ mod tests {
             remove_clauses: vec![],
             set_clauses: vec![],
             foreach_clauses: vec![],
+            load_csv_clauses: vec![],
             union_queries: vec![],
         };
 
@@ -2201,6 +2214,7 @@ mod tests {
             remove_clauses: vec![],
             set_clauses: vec![],
             foreach_clauses: vec![],
+            load_csv_clauses: vec![],
             union_queries: vec![],
         };
 

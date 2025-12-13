@@ -10,9 +10,9 @@ use nom::{
 
 use crate::parser::ast::{
     self, CallClause, CreateClause, ForeachClause, ForeachExpression, ForeachUpdateClause,
-    MatchClause, MatchElement, MergeClause, OnCreateClause, OnMatchClause, PropertyValue, Query,
-    ReturnClause, SetClause, UnionQuery, UnwindClause, UnwindExpression, WhereClause, WithClause,
-    WithExpression, WithItem,
+    LoadCsvClause, MatchClause, MatchElement, MergeClause, OnCreateClause, OnMatchClause,
+    PropertyValue, Query, ReturnClause, SetClause, UnionQuery, UnwindClause, UnwindExpression,
+    WhereClause, WithClause, WithExpression, WithItem,
 };
 use crate::parser::patterns::*;
 use crate::parser::span::{offset_to_line_column, Spanned};
@@ -35,6 +35,7 @@ pub enum Clause {
     Remove(ast::RemoveClause),
     Set(Vec<ast::SetClause>),
     Foreach(ast::ForeachClause),
+    LoadCsv(ast::LoadCsvClause),
 }
 
 // Parses a comma-separated list of match elements, stopping at clause boundaries
@@ -683,6 +684,7 @@ fn parse_subquery(input: &str) -> IResult<&str, Query> {
         remove_clauses: Vec::new(),
         set_clauses: Vec::new(),
         foreach_clauses: Vec::new(),
+        load_csv_clauses: Vec::new(),
         union_queries: Vec::new(),
     };
 
@@ -703,6 +705,7 @@ fn parse_subquery(input: &str) -> IResult<&str, Query> {
             Clause::Remove(remove_clause) => query.remove_clauses.push(remove_clause.clone()),
             Clause::Set(set_clauses) => query.set_clauses.extend(set_clauses.clone()),
             Clause::Foreach(foreach_clause) => query.foreach_clauses.push(foreach_clause.clone()),
+            Clause::LoadCsv(load_csv_clause) => query.load_csv_clauses.push(load_csv_clause.clone()),
             Clause::Query(_) => {
                 // Handle nested queries if needed
                 return Err(nom::Err::Error(nom::error::Error::new(
@@ -1388,6 +1391,85 @@ pub fn foreach_clause(input: &str) -> IResult<&str, ForeachClause> {
     ))
 }
 
+// Helper function to parse string literals (single or double quoted)
+fn parse_string_literal(input: &str) -> IResult<&str, String> {
+    let (input, quote) = alt((char('\''), char('"')))(input)?;
+    let (input, s) = nom::bytes::complete::take_while(|c| c != quote)(input)?;
+    let (input, _) = char(quote)(input)?;
+    Ok((input, s.to_string()))
+}
+
+// Parses the LOAD CSV clause (e.g. LOAD CSV FROM 'file.csv' AS row)
+pub fn load_csv_clause(input: &str) -> IResult<&str, LoadCsvClause> {
+    let (input, _) = multispace0(input)?;
+
+    // Optional USING PERIODIC COMMIT (deprecated but still valid)
+    let (input, periodic_commit) = if let Ok((rest, _)) = tuple::<_, _, nom::error::Error<&str>, _>((
+        tag_no_case("USING"),
+        multispace1,
+        tag_no_case("PERIODIC"),
+        multispace1,
+        tag_no_case("COMMIT"),
+    ))(input) {
+        // Try to parse optional number after PERIODIC COMMIT
+        let (rest2, num) = opt(preceded(multispace1, digit1))(rest)?;
+        let commit_size = num.and_then(|n| n.parse::<u64>().ok());
+        (rest2, commit_size)
+    } else {
+        (input, None)
+    };
+
+    let (input, _) = multispace0(input)?;
+    let (input, _) = tag_no_case("LOAD")(input)?;
+    let (input, _) = multispace1(input)?;
+    let (input, _) = tag_no_case("CSV")(input)?;
+    let (input, _) = multispace0(input)?;
+
+    // Optional WITH HEADERS
+    let (input, with_headers) = if let Ok((rest, _)) = tuple::<_, _, nom::error::Error<&str>, _>((
+        tag_no_case("WITH"),
+        multispace1,
+        tag_no_case("HEADERS"),
+    ))(input) {
+        (rest, true)
+    } else {
+        (input, false)
+    };
+
+    let (input, _) = multispace0(input)?;
+    let (input, _) = tag_no_case("FROM")(input)?;
+    let (input, _) = multispace0(input)?;
+
+    // Parse URL (string literal)
+    let (input, url) = parse_string_literal(input)?;
+
+    let (input, _) = multispace0(input)?;
+    let (input, _) = tag_no_case("AS")(input)?;
+    let (input, _) = multispace1(input)?;
+
+    // Parse variable name
+    let (input, variable) = identifier(input)?;
+
+    let (input, _) = multispace0(input)?;
+
+    // Optional FIELDTERMINATOR
+    let (input, field_terminator) = if let Ok((rest, _)) = tag_no_case::<_, _, nom::error::Error<&str>>("FIELDTERMINATOR")(input) {
+        let (rest, _) = multispace0(rest)?;
+        let (rest, terminator) = parse_string_literal(rest)?;
+        (rest, Some(terminator))
+    } else {
+        (input, None)
+    };
+
+    Ok((input, LoadCsvClause {
+        url,
+        variable: variable.to_string(),
+        with_headers,
+        field_terminator,
+        periodic_commit,
+    }))
+}
+
 // Parses the DELETE or DETACH DELETE clause (e.g. DELETE n, DETACH DELETE n, r)
 pub fn delete_clause(input: &str) -> IResult<&str, ast::DeleteClause> {
     let (input, _) = multispace0(input)?;
@@ -1586,6 +1668,10 @@ pub fn clause(input: &str) -> IResult<&str, Spanned<Clause>> {
             let start = offset(full_input, input);
             Spanned::new(Clause::Foreach(c), start)
         }),
+        map(load_csv_clause, |c| {
+            let start = offset(full_input, input);
+            Spanned::new(Clause::LoadCsv(c), start)
+        }),
     ))(input)
 }
 
@@ -1646,6 +1732,7 @@ pub fn parse_query(input: &str) -> IResult<&str, Query> {
         remove_clauses: Vec::new(),
         set_clauses: Vec::new(),
         foreach_clauses: Vec::new(),
+        load_csv_clauses: Vec::new(),
         union_queries: Vec::new(),
     };
 
@@ -1664,6 +1751,7 @@ pub fn parse_query(input: &str) -> IResult<&str, Query> {
             Clause::Remove(remove_clause) => query.remove_clauses.push(remove_clause),
             Clause::Set(set_clauses) => query.set_clauses.extend(set_clauses),
             Clause::Foreach(foreach_clause) => query.foreach_clauses.push(foreach_clause),
+            Clause::LoadCsv(load_csv_clause) => query.load_csv_clauses.push(load_csv_clause),
             Clause::Query(_) => {
                 // Handle nested queries if needed
             }
@@ -1743,6 +1831,7 @@ fn validate_clause_order(
                 ClauseOrderState::AfterMatch
             }
             (ClauseOrderState::Initial, Clause::Unwind(_)) => ClauseOrderState::AfterUnwind,
+            (ClauseOrderState::Initial, Clause::LoadCsv(_)) => ClauseOrderState::AfterUnwind, // LOAD CSV acts like UNWIND
             (ClauseOrderState::Initial, Clause::Create(_) | Clause::Merge(_)) => {
                 ClauseOrderState::AfterWrite
             }
@@ -1752,7 +1841,7 @@ fn validate_clause_order(
                 return Err(CypherGuardParsingError::invalid_clause_order(
                     "query start",
                     format!(
-                        "{} must come after a reading clause (MATCH, UNWIND, CREATE, MERGE)",
+                        "{} must come after a reading clause (MATCH, UNWIND, LOAD CSV, CREATE, MERGE)",
                         clause_name(clause)
                     ),
                 ));
@@ -1774,7 +1863,8 @@ fn validate_clause_order(
                 ClauseOrderState::AfterWrite
             }
 
-            // After UNWIND - can have WHERE, WITH, RETURN, or writing clauses (including FOREACH)
+            // After UNWIND - can have MATCH, WHERE, WITH, RETURN, or writing clauses (including FOREACH)
+            (ClauseOrderState::AfterUnwind, Clause::Match(_) | Clause::OptionalMatch(_)) => ClauseOrderState::AfterMatch,
             (ClauseOrderState::AfterUnwind, Clause::Unwind(_)) => ClauseOrderState::AfterUnwind,
             (ClauseOrderState::AfterUnwind, Clause::Where(_)) => ClauseOrderState::AfterWhere,
             (ClauseOrderState::AfterUnwind, Clause::With(_)) => ClauseOrderState::AfterWith,
@@ -1933,6 +2023,7 @@ fn clause_name(clause: &Clause) -> &'static str {
         Clause::Remove(_) => "REMOVE",
         Clause::Set(_) => "SET",
         Clause::Foreach(_) => "FOREACH",
+        Clause::LoadCsv(_) => "LOAD CSV",
     }
 }
 
@@ -3101,17 +3192,11 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_clause_order_unwind_before_match() {
-        let query = "UNWIND [1,2,3] AS x MATCH (a:Person)";
+    fn test_valid_clause_order_unwind_then_match() {
+        // UNWIND can start a query, and MATCH can follow UNWIND (e.g., for LOAD CSV)
+        let query = "UNWIND [1,2,3] AS x MATCH (a:Person) RETURN a, x";
         let result = crate::parse_query(query);
-        assert!(result.is_err(), "Invalid clause order should fail");
-
-        if let Err(CypherGuardParsingError::InvalidClauseOrder { context, details }) = result {
-            assert!(context.contains("query start"));
-            assert!(details.contains("UNWIND must come after a reading clause"));
-        } else {
-            panic!("Expected InvalidClauseOrder error");
-        }
+        assert!(result.is_ok(), "UNWIND followed by MATCH should be valid: {:?}", result.err());
     }
 
     #[test]
@@ -4423,5 +4508,136 @@ mod subquery_expression_tests {
 
         let query_ast = result.unwrap();
         assert_eq!(query_ast.return_clauses.len(), 1);
+    }
+
+    // === LOAD CSV Tests ===
+
+    #[test]
+    fn test_load_csv_basic() {
+        let query = "LOAD CSV FROM 'file:///artists.csv' AS row CREATE (:Artist)";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse basic LOAD CSV: {:?}", result.err());
+
+        let query_ast = result.unwrap();
+        assert_eq!(query_ast.load_csv_clauses.len(), 1);
+        let load_csv = &query_ast.load_csv_clauses[0];
+        assert_eq!(load_csv.url, "file:///artists.csv");
+        assert_eq!(load_csv.variable, "row");
+        assert!(!load_csv.with_headers);
+        assert!(load_csv.field_terminator.is_none());
+        assert!(load_csv.periodic_commit.is_none());
+    }
+
+    #[test]
+    fn test_load_csv_with_headers() {
+        let query = "LOAD CSV WITH HEADERS FROM 'file:///artists.csv' AS row CREATE (:Artist)";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse LOAD CSV WITH HEADERS: {:?}", result.err());
+
+        let query_ast = result.unwrap();
+        assert_eq!(query_ast.load_csv_clauses.len(), 1);
+        let load_csv = &query_ast.load_csv_clauses[0];
+        assert!(load_csv.with_headers);
+        assert_eq!(load_csv.variable, "row");
+    }
+
+    #[test]
+    fn test_load_csv_with_field_terminator() {
+        let query = "LOAD CSV FROM 'file:///data.csv' AS row FIELDTERMINATOR ';' CREATE (:Person)";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse LOAD CSV with FIELDTERMINATOR: {:?}", result.err());
+
+        let query_ast = result.unwrap();
+        assert_eq!(query_ast.load_csv_clauses.len(), 1);
+        let load_csv = &query_ast.load_csv_clauses[0];
+        assert_eq!(load_csv.field_terminator, Some(";".to_string()));
+    }
+
+    #[test]
+    fn test_load_csv_with_periodic_commit() {
+        let query = "USING PERIODIC COMMIT 500 LOAD CSV FROM 'file:///large.csv' AS row CREATE (:Data)";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse LOAD CSV with PERIODIC COMMIT: {:?}", result.err());
+
+        let query_ast = result.unwrap();
+        assert_eq!(query_ast.load_csv_clauses.len(), 1);
+        let load_csv = &query_ast.load_csv_clauses[0];
+        assert_eq!(load_csv.periodic_commit, Some(500));
+    }
+
+    #[test]
+    fn test_load_csv_with_periodic_commit_no_size() {
+        let query = "USING PERIODIC COMMIT LOAD CSV FROM 'file:///large.csv' AS row CREATE (:Data)";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse LOAD CSV with PERIODIC COMMIT (no size): {:?}", result.err());
+
+        let query_ast = result.unwrap();
+        assert_eq!(query_ast.load_csv_clauses.len(), 1);
+        let load_csv = &query_ast.load_csv_clauses[0];
+        assert_eq!(load_csv.periodic_commit, None); // No size specified
+    }
+
+    #[test]
+    fn test_load_csv_with_all_options() {
+        let query = "USING PERIODIC COMMIT 1000 LOAD CSV WITH HEADERS FROM 'file:///data.csv' AS row FIELDTERMINATOR '|' MERGE (:Person)";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse LOAD CSV with all options: {:?}", result.err());
+
+        let query_ast = result.unwrap();
+        assert_eq!(query_ast.load_csv_clauses.len(), 1);
+        let load_csv = &query_ast.load_csv_clauses[0];
+        assert_eq!(load_csv.url, "file:///data.csv");
+        assert_eq!(load_csv.variable, "row");
+        assert!(load_csv.with_headers);
+        assert_eq!(load_csv.field_terminator, Some("|".to_string()));
+        assert_eq!(load_csv.periodic_commit, Some(1000));
+    }
+
+    #[test]
+    fn test_load_csv_with_http_url() {
+        let query = "LOAD CSV FROM 'https://data.neo4j.com/bands/artists.csv' AS row CREATE (:Artist)";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse LOAD CSV with HTTP URL: {:?}", result.err());
+
+        let query_ast = result.unwrap();
+        assert_eq!(query_ast.load_csv_clauses.len(), 1);
+        let load_csv = &query_ast.load_csv_clauses[0];
+        assert_eq!(load_csv.url, "https://data.neo4j.com/bands/artists.csv");
+    }
+
+    #[test]
+    fn test_load_csv_followed_by_match() {
+        let query = "LOAD CSV FROM 'file:///data.csv' AS row MATCH (n:Existing) CREATE (n)-[:REL]->(:New)";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse LOAD CSV followed by MATCH: {:?}", result.err());
+
+        let query_ast = result.unwrap();
+        assert_eq!(query_ast.load_csv_clauses.len(), 1);
+        assert_eq!(query_ast.match_clauses.len(), 1);
+        assert_eq!(query_ast.create_clauses.len(), 1);
+    }
+
+    #[test]
+    fn test_load_csv_with_where_and_return() {
+        let query = "LOAD CSV WITH HEADERS FROM 'file:///data.csv' AS row WHERE 1 = 1 RETURN row";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse LOAD CSV with WHERE and RETURN: {:?}", result.err());
+
+        let query_ast = result.unwrap();
+        assert_eq!(query_ast.load_csv_clauses.len(), 1);
+        assert_eq!(query_ast.where_clauses.len(), 1);
+        assert_eq!(query_ast.return_clauses.len(), 1);
+    }
+
+    #[test]
+    fn test_load_csv_double_quotes() {
+        let query = "LOAD CSV FROM \"file:///artists.csv\" AS row CREATE (:Artist)";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse LOAD CSV with double quotes: {:?}", result.err());
+
+        let query_ast = result.unwrap();
+        assert_eq!(query_ast.load_csv_clauses.len(), 1);
+        let load_csv = &query_ast.load_csv_clauses[0];
+        assert_eq!(load_csv.url, "file:///artists.csv");
     }
 }
