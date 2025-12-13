@@ -61,6 +61,9 @@ pub enum WhereCondition {
         path_var: String,
         property: String,
     },
+    PatternPredicate {
+        pattern: Vec<PatternElement>,
+    },
     And(Box<WhereCondition>, Box<WhereCondition>),
     Or(Box<WhereCondition>, Box<WhereCondition>),
     Xor(Box<WhereCondition>, Box<WhereCondition>),

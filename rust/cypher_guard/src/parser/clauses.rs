@@ -399,9 +399,21 @@ pub fn parse_basic_condition(input: &str) -> IResult<&str, ast::WhereCondition> 
         return Ok(result);
     }
 
-    // If comparison parsing failed, try to parse parenthesized WHERE condition
-    // (e.g., WHERE (a > 5 AND b < 10))
+    // If comparison parsing failed, try to parse parenthesized WHERE condition or pattern predicate
+    // (e.g., WHERE (a > 5 AND b < 10) or WHERE (a)-[:KNOWS]->(b))
     if let Ok((rest, _)) = tag::<&str, &str, nom::error::Error<&str>>("(")(input) {
+        // Try to parse as a pattern predicate first (e.g., (a)-[:REL]->(b))
+        if let Ok((rest2, pattern)) = pattern_element_sequence(input, false) {
+            // Check if this looks like a valid pattern (has more than just a node)
+            if pattern.len() > 1 || (pattern.len() == 1 && !rest2.trim_start().starts_with('>')) {
+                return Ok((
+                    rest2,
+                    ast::WhereCondition::PatternPredicate { pattern },
+                ));
+            }
+        }
+
+        // Otherwise, try to parse as parenthesized WHERE expression
         if let Ok((rest, condition)) = parse_where_expr(rest) {
             if let Ok((rest, _)) = tag::<&str, &str, nom::error::Error<&str>>(")")(rest) {
                 return Ok((

@@ -423,6 +423,41 @@ fn extract_from_where_condition(condition: &WhereCondition, elements: &mut Query
                 context: PropertyContext::Where,
             });
         }
+        WhereCondition::PatternPredicate { pattern } => {
+            // Extract variables and relationships from the pattern
+            for element in pattern {
+                match element {
+                    PatternElement::Node(node) => {
+                        if let Some(var) = &node.variable {
+                            elements.add_variable(var.clone());
+                        }
+                        if let Some(props) = &node.properties {
+                            for prop in props {
+                                extract_from_property_value(&prop.value, elements, PropertyContext::Where);
+                            }
+                        }
+                    }
+                    PatternElement::Relationship(rel) => {
+                        let details = match rel {
+                            RelationshipPattern::Regular(d) => d,
+                            RelationshipPattern::OptionalRelationship(d) => d,
+                        };
+                        if let Some(var) = &details.variable {
+                            elements.add_variable(var.clone());
+                        }
+                        if let Some(props) = &details.properties {
+                            for prop in props {
+                                extract_from_property_value(&prop.value, elements, PropertyContext::Where);
+                            }
+                        }
+                    }
+                    PatternElement::QuantifiedPathPattern(_qpp) => {
+                        // QPP validation not yet implemented
+                        // Just skip for now
+                    }
+                }
+            }
+        }
         WhereCondition::And(left, right) => {
             extract_from_where_condition(left, elements);
             extract_from_where_condition(right, elements);
