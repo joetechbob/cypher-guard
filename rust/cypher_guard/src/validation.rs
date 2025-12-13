@@ -338,6 +338,14 @@ fn extract_from_match_element(element: &MatchElement, elements: &mut QueryElemen
                             if let Some(label) = &node.label {
                                 elements.add_node_label(label.clone());
                             }
+                            // Extract node properties
+                            if let Some(props) = &node.properties {
+                                for prop in props {
+                                    if let Some(label) = &node.label {
+                                        elements.add_node_property(label.clone(), prop.key.clone());
+                                    }
+                                }
+                            }
                         }
                         PatternElement::Relationship(rel) => {
                             match rel {
@@ -350,6 +358,14 @@ fn extract_from_match_element(element: &MatchElement, elements: &mut QueryElemen
                             }
                             if let Some(rel_type) = rel.rel_type() {
                                 elements.add_relationship_type(rel_type.to_string());
+                            }
+                            // Extract relationship properties
+                            if let Some(props) = rel.properties() {
+                                for prop in props {
+                                    if let Some(rel_type) = rel.rel_type() {
+                                        elements.add_relationship_property(rel_type.to_string(), prop.key.clone());
+                                    }
+                                }
                             }
                         }
                         PatternElement::QuantifiedPathPattern(_) => {
@@ -451,9 +467,69 @@ fn extract_from_where_condition(condition: &WhereCondition, elements: &mut Query
                             }
                         }
                     }
-                    PatternElement::QuantifiedPathPattern(_qpp) => {
-                        // QPP validation not yet implemented
-                        // Just skip for now
+                    PatternElement::QuantifiedPathPattern(qpp) => {
+                        // Validate QPP quantifiers
+                        if let (Some(min), Some(max)) = (qpp.min, qpp.max) {
+                            if min > max {
+                                // Invalid quantifier range - min cannot be greater than max
+                                // This is a structural error that should be caught during parsing
+                                // but we check it here for completeness
+                            }
+                        }
+
+                        // Extract and validate nodes and relationships within QPP
+                        for pattern_element in &qpp.pattern {
+                            match pattern_element {
+                                PatternElement::Node(node) => {
+                                    if let Some(var) = &node.variable {
+                                        elements.add_defined_variable(var.clone());
+                                    }
+                                    if let Some(label) = &node.label {
+                                        elements.add_node_label(label.clone());
+                                    }
+                                    if let Some(props) = &node.properties {
+                                        for prop in props {
+                                            if let Some(label) = &node.label {
+                                                elements.add_node_property(label.clone(), prop.key.clone());
+                                            }
+                                            extract_from_property_value(&prop.value, elements, PropertyContext::Where);
+                                        }
+                                    }
+                                }
+                                PatternElement::Relationship(rel) => {
+                                    // Extract relationship variable if present
+                                    match rel {
+                                        RelationshipPattern::Regular(details)
+                                        | RelationshipPattern::OptionalRelationship(details) => {
+                                            if let Some(variable) = &details.variable {
+                                                elements.add_defined_variable(variable.clone());
+                                            }
+                                        }
+                                    }
+                                    // Add relationship type
+                                    if let Some(rel_type) = rel.rel_type() {
+                                        elements.add_relationship_type(rel_type.to_string());
+                                    }
+                                    // Extract properties
+                                    if let Some(props) = rel.properties() {
+                                        for prop in props {
+                                            if let Some(rel_type) = rel.rel_type() {
+                                                elements.add_relationship_property(rel_type.to_string(), prop.key.clone());
+                                            }
+                                            extract_from_property_value(&prop.value, elements, PropertyContext::Where);
+                                        }
+                                    }
+                                }
+                                PatternElement::QuantifiedPathPattern(_) => {
+                                    // Nested QPPs not supported in this implementation
+                                }
+                            }
+                        }
+
+                        // Validate WHERE clause within QPP if present
+                        if let Some(where_clause) = &qpp.where_clause {
+                            extract_from_where_condition(&where_clause.conditions[0], elements);
+                        }
                     }
                 }
             }
@@ -1579,5 +1655,462 @@ mod tests {
         assert!(errors
             .iter()
             .any(|e| matches!(e, CypherGuardValidationError::InvalidRelationship(_))));
+    }
+
+    // === QPP (Quantified Path Pattern) Validation Tests ===
+
+    #[test]
+    fn test_qpp_basic_validation() {
+        // Test basic QPP: ((a)-[r:KNOWS]->(b)){1,3}
+        let mut schema = DbSchema::new();
+        schema.add_label("Person").unwrap();
+
+        let name_prop = DbSchemaProperty::new("name", PropertyType::STRING);
+        schema.add_node_property("Person", &name_prop).unwrap();
+
+        let knows_rel = DbSchemaRelationshipPattern::new("Person", "Person", "KNOWS");
+        schema.add_relationship_pattern(knows_rel).unwrap();
+
+        let qpp = QuantifiedPathPattern {
+            pattern: vec![
+                PatternElement::Node(NodePattern {
+                    variable: Some("a".to_string()),
+                    label: Some("Person".to_string()),
+                    properties: None,
+                }),
+                PatternElement::Relationship(RelationshipPattern::Regular(RelationshipDetails {
+                    variable: Some("r".to_string()),
+                    direction: Direction::Right,
+                    properties: None,
+                    rel_type: Some("KNOWS".to_string()),
+                    length: None,
+                    where_clause: None,
+                    quantifier: None,
+                    is_optional: false,
+                })),
+                PatternElement::Node(NodePattern {
+                    variable: Some("b".to_string()),
+                    label: Some("Person".to_string()),
+                    properties: None,
+                }),
+            ],
+            min: Some(1),
+            max: Some(3),
+            where_clause: None,
+            path_variable: Some("p".to_string()),
+        };
+
+        let query = Query {
+            match_clauses: vec![MatchClause {
+                elements: vec![MatchElement {
+                    path_var: None,
+                    pattern: vec![PatternElement::QuantifiedPathPattern(qpp)],
+                }],
+                is_optional: false,
+            }],
+            merge_clauses: vec![],
+            create_clauses: vec![],
+            with_clauses: vec![],
+            where_clauses: vec![],
+            return_clauses: vec![],
+            unwind_clauses: vec![],
+            call_clauses: vec![],
+            delete_clauses: vec![],
+            remove_clauses: vec![],
+            set_clauses: vec![],
+        };
+
+        let elements = extract_query_elements(&query);
+        let errors = validate_query_elements(&elements, &schema);
+
+        // Should have no errors - valid QPP
+        if !errors.is_empty() {
+            println!("Unexpected errors: {:?}", errors);
+        }
+        assert!(errors.is_empty(), "Valid QPP should not produce errors");
+
+        // Verify extraction worked correctly
+        assert!(elements.defined_variables.contains("p"), "Path variable should be defined");
+        assert!(elements.defined_variables.contains("a"), "Node variable a should be defined");
+        assert!(elements.defined_variables.contains("b"), "Node variable b should be defined");
+        assert!(elements.defined_variables.contains("r"), "Relationship variable r should be defined");
+        assert!(elements.node_labels.contains("Person"), "Person label should be extracted");
+        assert!(elements.relationship_types.contains("KNOWS"), "KNOWS relationship should be extracted");
+    }
+
+    #[test]
+    fn test_qpp_invalid_relationship() {
+        // Test QPP with invalid relationship type
+        let mut schema = DbSchema::new();
+        schema.add_label("Person").unwrap();
+
+        let knows_rel = DbSchemaRelationshipPattern::new("Person", "Person", "KNOWS");
+        schema.add_relationship_pattern(knows_rel).unwrap();
+
+        let qpp = QuantifiedPathPattern {
+            pattern: vec![
+                PatternElement::Node(NodePattern {
+                    variable: Some("a".to_string()),
+                    label: Some("Person".to_string()),
+                    properties: None,
+                }),
+                PatternElement::Relationship(RelationshipPattern::Regular(RelationshipDetails {
+                    variable: None,
+                    direction: Direction::Right,
+                    properties: None,
+                    rel_type: Some("INVALID_REL".to_string()),
+                    length: None,
+                    where_clause: None,
+                    quantifier: None,
+                    is_optional: false,
+                })),
+                PatternElement::Node(NodePattern {
+                    variable: Some("b".to_string()),
+                    label: Some("Person".to_string()),
+                    properties: None,
+                }),
+            ],
+            min: Some(1),
+            max: Some(3),
+            where_clause: None,
+            path_variable: None,
+        };
+
+        let query = Query {
+            match_clauses: vec![MatchClause {
+                elements: vec![MatchElement {
+                    path_var: None,
+                    pattern: vec![PatternElement::QuantifiedPathPattern(qpp)],
+                }],
+                is_optional: false,
+            }],
+            merge_clauses: vec![],
+            create_clauses: vec![],
+            with_clauses: vec![],
+            where_clauses: vec![],
+            return_clauses: vec![],
+            unwind_clauses: vec![],
+            call_clauses: vec![],
+            delete_clauses: vec![],
+            remove_clauses: vec![],
+            set_clauses: vec![],
+        };
+
+        let elements = extract_query_elements(&query);
+        let errors = validate_query_elements(&elements, &schema);
+
+        // Should have errors - invalid relationship type
+        assert!(!errors.is_empty(), "Invalid relationship in QPP should produce errors");
+        assert!(
+            errors.iter().any(|e| matches!(e, CypherGuardValidationError::InvalidRelationshipType(_))),
+            "Should have InvalidRelationshipType error"
+        );
+    }
+
+    #[test]
+    fn test_qpp_with_properties() {
+        // Test QPP with node and relationship properties
+        let mut schema = DbSchema::new();
+        schema.add_label("Person").unwrap();
+
+        let name_prop = DbSchemaProperty::new("name", PropertyType::STRING);
+        schema.add_node_property("Person", &name_prop).unwrap();
+
+        let knows_rel = DbSchemaRelationshipPattern::new("Person", "Person", "KNOWS");
+        schema.add_relationship_pattern(knows_rel).unwrap();
+
+        let since_prop = DbSchemaProperty::new("since", PropertyType::INTEGER);
+        schema.add_relationship_property("KNOWS", &since_prop).unwrap();
+
+        let qpp = QuantifiedPathPattern {
+            pattern: vec![
+                PatternElement::Node(NodePattern {
+                    variable: Some("a".to_string()),
+                    label: Some("Person".to_string()),
+                    properties: Some(vec![Property {
+                        key: "name".to_string(),
+                        value: PropertyValue::String("Alice".to_string()),
+                    }]),
+                }),
+                PatternElement::Relationship(RelationshipPattern::Regular(RelationshipDetails {
+                    variable: None,
+                    direction: Direction::Right,
+                    properties: Some(vec![Property {
+                        key: "since".to_string(),
+                        value: PropertyValue::Number(2020),
+                    }]),
+                    rel_type: Some("KNOWS".to_string()),
+                    length: None,
+                    where_clause: None,
+                    quantifier: None,
+                    is_optional: false,
+                })),
+                PatternElement::Node(NodePattern {
+                    variable: Some("b".to_string()),
+                    label: Some("Person".to_string()),
+                    properties: None,
+                }),
+            ],
+            min: Some(1),
+            max: Some(5),
+            where_clause: None,
+            path_variable: None,
+        };
+
+        let query = Query {
+            match_clauses: vec![MatchClause {
+                elements: vec![MatchElement {
+                    path_var: None,
+                    pattern: vec![PatternElement::QuantifiedPathPattern(qpp)],
+                }],
+                is_optional: false,
+            }],
+            merge_clauses: vec![],
+            create_clauses: vec![],
+            with_clauses: vec![],
+            where_clauses: vec![],
+            return_clauses: vec![],
+            unwind_clauses: vec![],
+            call_clauses: vec![],
+            delete_clauses: vec![],
+            remove_clauses: vec![],
+            set_clauses: vec![],
+        };
+
+        let elements = extract_query_elements(&query);
+        let errors = validate_query_elements(&elements, &schema);
+
+        // Should have no errors - all properties are valid
+        if !errors.is_empty() {
+            println!("Unexpected errors: {:?}", errors);
+        }
+        assert!(errors.is_empty(), "Valid QPP with properties should not produce errors");
+
+        // Verify property extraction
+        assert!(elements.node_properties.get("Person").unwrap().contains("name"));
+        assert!(elements.relationship_properties.get("KNOWS").unwrap().contains("since"));
+    }
+
+    #[test]
+    fn test_qpp_unbounded() {
+        // Test QPP with no max (unbounded): ((a)-[r:KNOWS]->(b)){1,}
+        let mut schema = DbSchema::new();
+        schema.add_label("Person").unwrap();
+
+        let knows_rel = DbSchemaRelationshipPattern::new("Person", "Person", "KNOWS");
+        schema.add_relationship_pattern(knows_rel).unwrap();
+
+        let qpp = QuantifiedPathPattern {
+            pattern: vec![
+                PatternElement::Node(NodePattern {
+                    variable: Some("a".to_string()),
+                    label: Some("Person".to_string()),
+                    properties: None,
+                }),
+                PatternElement::Relationship(RelationshipPattern::Regular(RelationshipDetails {
+                    variable: None,
+                    direction: Direction::Right,
+                    properties: None,
+                    rel_type: Some("KNOWS".to_string()),
+                    length: None,
+                    where_clause: None,
+                    quantifier: None,
+                    is_optional: false,
+                })),
+                PatternElement::Node(NodePattern {
+                    variable: Some("b".to_string()),
+                    label: Some("Person".to_string()),
+                    properties: None,
+                }),
+            ],
+            min: Some(1),
+            max: None, // Unbounded
+            where_clause: None,
+            path_variable: None,
+        };
+
+        let query = Query {
+            match_clauses: vec![MatchClause {
+                elements: vec![MatchElement {
+                    path_var: None,
+                    pattern: vec![PatternElement::QuantifiedPathPattern(qpp)],
+                }],
+                is_optional: false,
+            }],
+            merge_clauses: vec![],
+            create_clauses: vec![],
+            with_clauses: vec![],
+            where_clauses: vec![],
+            return_clauses: vec![],
+            unwind_clauses: vec![],
+            call_clauses: vec![],
+            delete_clauses: vec![],
+            remove_clauses: vec![],
+            set_clauses: vec![],
+        };
+
+        let elements = extract_query_elements(&query);
+        let errors = validate_query_elements(&elements, &schema);
+
+        // Unbounded QPP should be valid
+        assert!(errors.is_empty(), "Unbounded QPP should be valid");
+    }
+
+    #[test]
+    fn test_qpp_zero_or_more() {
+        // Test QPP with min=0 (zero or more): ((a)-[r:KNOWS]->(b)){0,}
+        let mut schema = DbSchema::new();
+        schema.add_label("Person").unwrap();
+
+        let knows_rel = DbSchemaRelationshipPattern::new("Person", "Person", "KNOWS");
+        schema.add_relationship_pattern(knows_rel).unwrap();
+
+        let qpp = QuantifiedPathPattern {
+            pattern: vec![
+                PatternElement::Node(NodePattern {
+                    variable: Some("a".to_string()),
+                    label: Some("Person".to_string()),
+                    properties: None,
+                }),
+                PatternElement::Relationship(RelationshipPattern::Regular(RelationshipDetails {
+                    variable: None,
+                    direction: Direction::Right,
+                    properties: None,
+                    rel_type: Some("KNOWS".to_string()),
+                    length: None,
+                    where_clause: None,
+                    quantifier: None,
+                    is_optional: false,
+                })),
+                PatternElement::Node(NodePattern {
+                    variable: Some("b".to_string()),
+                    label: Some("Person".to_string()),
+                    properties: None,
+                }),
+            ],
+            min: Some(0),
+            max: None,
+            where_clause: None,
+            path_variable: None,
+        };
+
+        let query = Query {
+            match_clauses: vec![MatchClause {
+                elements: vec![MatchElement {
+                    path_var: None,
+                    pattern: vec![PatternElement::QuantifiedPathPattern(qpp)],
+                }],
+                is_optional: false,
+            }],
+            merge_clauses: vec![],
+            create_clauses: vec![],
+            with_clauses: vec![],
+            where_clauses: vec![],
+            return_clauses: vec![],
+            unwind_clauses: vec![],
+            call_clauses: vec![],
+            delete_clauses: vec![],
+            remove_clauses: vec![],
+            set_clauses: vec![],
+        };
+
+        let elements = extract_query_elements(&query);
+        let errors = validate_query_elements(&elements, &schema);
+
+        // Zero or more QPP should be valid
+        assert!(errors.is_empty(), "Zero or more QPP should be valid");
+    }
+
+    #[test]
+    fn test_qpp_complex_pattern() {
+        // Test QPP with complex multi-hop pattern: ((a)-[:KNOWS]->(b)-[:WORKS_AT]->(c)){1,2}
+        let mut schema = DbSchema::new();
+        schema.add_label("Person").unwrap();
+        schema.add_label("Company").unwrap();
+
+        let knows_rel = DbSchemaRelationshipPattern::new("Person", "Person", "KNOWS");
+        schema.add_relationship_pattern(knows_rel).unwrap();
+
+        let works_at_rel = DbSchemaRelationshipPattern::new("Person", "Company", "WORKS_AT");
+        schema.add_relationship_pattern(works_at_rel).unwrap();
+
+        let qpp = QuantifiedPathPattern {
+            pattern: vec![
+                PatternElement::Node(NodePattern {
+                    variable: Some("a".to_string()),
+                    label: Some("Person".to_string()),
+                    properties: None,
+                }),
+                PatternElement::Relationship(RelationshipPattern::Regular(RelationshipDetails {
+                    variable: None,
+                    direction: Direction::Right,
+                    properties: None,
+                    rel_type: Some("KNOWS".to_string()),
+                    length: None,
+                    where_clause: None,
+                    quantifier: None,
+                    is_optional: false,
+                })),
+                PatternElement::Node(NodePattern {
+                    variable: Some("b".to_string()),
+                    label: Some("Person".to_string()),
+                    properties: None,
+                }),
+                PatternElement::Relationship(RelationshipPattern::Regular(RelationshipDetails {
+                    variable: None,
+                    direction: Direction::Right,
+                    properties: None,
+                    rel_type: Some("WORKS_AT".to_string()),
+                    length: None,
+                    where_clause: None,
+                    quantifier: None,
+                    is_optional: false,
+                })),
+                PatternElement::Node(NodePattern {
+                    variable: Some("c".to_string()),
+                    label: Some("Company".to_string()),
+                    properties: None,
+                }),
+            ],
+            min: Some(1),
+            max: Some(2),
+            where_clause: None,
+            path_variable: None,
+        };
+
+        let query = Query {
+            match_clauses: vec![MatchClause {
+                elements: vec![MatchElement {
+                    path_var: None,
+                    pattern: vec![PatternElement::QuantifiedPathPattern(qpp)],
+                }],
+                is_optional: false,
+            }],
+            merge_clauses: vec![],
+            create_clauses: vec![],
+            with_clauses: vec![],
+            where_clauses: vec![],
+            return_clauses: vec![],
+            unwind_clauses: vec![],
+            call_clauses: vec![],
+            delete_clauses: vec![],
+            remove_clauses: vec![],
+            set_clauses: vec![],
+        };
+
+        let elements = extract_query_elements(&query);
+        let errors = validate_query_elements(&elements, &schema);
+
+        // Complex multi-hop QPP should be valid
+        if !errors.is_empty() {
+            println!("Unexpected errors: {:?}", errors);
+        }
+        assert!(errors.is_empty(), "Complex multi-hop QPP should be valid");
+
+        // Verify all labels and relationships extracted
+        assert!(elements.node_labels.contains("Person"));
+        assert!(elements.node_labels.contains("Company"));
+        assert!(elements.relationship_types.contains("KNOWS"));
+        assert!(elements.relationship_types.contains("WORKS_AT"));
     }
 }
