@@ -846,12 +846,16 @@ pub fn call_clause(input: &str) -> IResult<&str, ast::CallClause> {
         tuple((multispace0, char('}'), multispace0)),
     )(input)
     {
+        // Try to parse optional IN TRANSACTIONS clause
+        let (rest2, in_transactions) = opt(in_transactions_clause)(rest)?;
+
         return Ok((
-            rest,
+            rest2,
             ast::CallClause {
                 subquery: Some(subquery),
                 procedure: None,
                 yield_clause: None,
+                in_transactions,
             },
         ));
     }
@@ -882,8 +886,33 @@ pub fn call_clause(input: &str) -> IResult<&str, ast::CallClause> {
             subquery: None,
             procedure: Some(procedure),
             yield_clause,
+            in_transactions: None, // IN TRANSACTIONS only for subqueries
         },
     ))
+}
+
+/// Parses the IN TRANSACTIONS clause for CALL subqueries
+/// Examples: IN TRANSACTIONS, IN TRANSACTIONS OF 1000 ROWS
+fn in_transactions_clause(input: &str) -> IResult<&str, ast::InTransactions> {
+    let (input, _) = multispace0(input)?;
+    let (input, _) = tag_no_case("IN")(input)?;
+    let (input, _) = multispace1(input)?;
+    let (input, _) = tag_no_case("TRANSACTIONS")(input)?;
+    let (input, _) = multispace0(input)?;
+
+    // Try to parse optional OF n ROWS
+    let (input, batch_size) = if let Ok((rest, _)) = tag_no_case::<_, _, nom::error::Error<&str>>("OF")(input) {
+        let (rest2, _) = multispace1(rest)?;
+        let (rest3, size_str) = digit1(rest2)?;
+        let batch_size: u64 = size_str.parse().unwrap_or(0);
+        let (rest4, _) = multispace1(rest3)?;
+        let (rest5, _) = tag_no_case("ROWS")(rest4)?;
+        (rest5, Some(batch_size))
+    } else {
+        (input, None)
+    };
+
+    Ok((input, ast::InTransactions { batch_size }))
 }
 
 // Parses a Cypher parameter (e.g., $param)

@@ -378,6 +378,13 @@ pub struct CallClause {
     pub subquery: Option<Query>,           // For CALL { ... } subqueries
     pub procedure: Option<String>,         // For CALL procedure() calls
     pub yield_clause: Option<Vec<String>>, // For YIELD clause
+    pub in_transactions: Option<InTransactions>, // For IN TRANSACTIONS clause
+}
+
+// IN TRANSACTIONS clause for CALL subqueries (Neo4j 4.4+)
+#[derive(Debug, PartialEq, Clone)]
+pub struct InTransactions {
+    pub batch_size: Option<u64>, // Optional row count for IN TRANSACTIONS OF n ROWS
 }
 
 // DELETE clause for removing nodes and relationships
