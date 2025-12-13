@@ -1,7 +1,7 @@
 # Cypher-Guard: Neo4j Coverage Analysis
 
-**Status**: 350/350 tests passing (100%)
-**Date**: 2025-12-13
+**Status**: 402/402 tests passing (100%) ✅
+**Date**: 2025-12-13 (Updated)
 **Goal**: Achieve comprehensive Neo4j Cypher coverage
 
 ## Current Coverage Status
@@ -10,10 +10,10 @@
 
 #### Reading Clauses
 - [x] `MATCH` - Standard pattern matching
-- [x] `OPTIONAL MATCH` - Optional pattern matching  
-- [x] `WHERE` - Filtering with comparisons
-- [x] `RETURN` - Returning results
-- [x] `WITH` - Projection and piping
+- [x] `OPTIONAL MATCH` - Optional pattern matching
+- [x] `WHERE` - Filtering with comparisons, functions, **and pattern predicates**
+- [x] `RETURN` - Returning results with DISTINCT
+- [x] `WITH` - Projection and piping with DISTINCT
 - [x] `UNWIND` - List unwinding
 - [x] `CALL` - Subqueries and procedures
 
@@ -29,296 +29,242 @@
 - [x] Relationship patterns: `-[r:TYPE]->`, `<-[r:TYPE]-`, `-[r:TYPE]-`
 - [x] Variable length paths: `*1..5`, `*..3`, `*2..`
 - [x] Multiple patterns in single MATCH
+- [x] **Pattern predicates in WHERE**: `WHERE (a)-[:REL]->(b)`, `WHERE NOT (a)-[:REL]->(b)` ✨ NEW!
 
 #### WHERE Clause Features
 - [x] Comparison operators: `=`, `<>`, `<`, `>`, `<=`, `>=`
 - [x] `IS NULL` / `IS NOT NULL`
-- [x] `AND` / `OR` / `NOT`
+- [x] `AND` / `OR` / `XOR` / `NOT`
 - [x] Parenthesized conditions
 - [x] Function calls in WHERE: `WHERE length(name) > 5`
 - [x] Property access: `WHERE n.prop = value`
+- [x] **Pattern predicates**: `WHERE (n)-[:KNOWS]->(m)` ✨ NEW!
+- [x] **String operators**: `STARTS WITH`, `ENDS WITH`, `CONTAINS`, `=~` (regex)
+- [x] **IN operator**: `WHERE n.prop IN [1, 2, 3]`
+
+#### Expressions & Operators
+- [x] **Arithmetic**: `+`, `-`, `*`, `/`, `%`, `^` (exponentiation)
+- [x] **String concatenation**: `+` and `||`
+- [x] **List operations**:
+  - [x] Concatenation: `list1 + list2`, `list1 || list2`
+  - [x] Element access: `list[0]`, `list[-1]`
+  - [x] Slicing: `list[1..3]`, `list[1..]`, `list[..3]`
+  - [x] List comprehension: `[x IN list WHERE x > 5 | x * 2]`
+  - [x] Pattern comprehension: `[(n)-->(m) WHERE m.age > 25 | m.name]`
+- [x] **Map operations**:
+  - [x] Map literals: `{key: value}`
+  - [x] Property access with dot: `map.key`
+  - [x] Property access with brackets: `map['key']`
+  - [x] Map projection: `n{.name, .age, computed: n.prop * 2}`
+- [x] **Property access**:
+  - [x] Dot notation: `n.property`
+  - [x] Bracket notation: `n['property']`
+  - [x] Dynamic access: `n[variableKey]`
 
 #### Functions
 - [x] `count()` with wildcard: `count(*)`
 - [x] `count()` with property: `count(n.prop)`
-- [x] Function calls in RETURN
-- [x] Function calls in WHERE
-- [x] Function calls in SET: `SET n.created = timestamp()`
+- [x] Function calls in RETURN, WHERE, SET
 - [x] Nested function calls
+- [x] Aggregation functions: `sum()`, `avg()`, `min()`, `max()`, `collect()`
 
-#### Expressions
-- [x] Property access: `n.property`
+#### Data Types
 - [x] String literals (single and double quotes)
-- [x] Numeric literals
+- [x] Numeric literals (integers and floats)
 - [x] Boolean literals: `true`, `false`
 - [x] NULL literal
-- [x] Parameters: `$param`
+- [x] **Parameters**: `$param` (including in property maps)
 - [x] Lists: `[1, 2, 3]`
 - [x] Maps: `{key: value}`
 
-## 🔴 Missing Features (Comprehensive List from Neo4j Docs)
+#### Sorting & Limiting
+- [x] `ORDER BY` - Single and multiple properties
+- [x] `ASC` / `DESC` - Sort directions
+- [x] `LIMIT` - Result limiting
+- [x] `SKIP` - Result offset
+- [x] `DISTINCT` - In RETURN and WITH clauses
 
-### Priority 1: CRITICAL Expression Features (High Usage)
+#### Advanced Features
+- [x] **CASE expressions**: `CASE WHEN ... THEN ... ELSE ... END`
+- [x] Quantified Path Patterns (AST defined, parser implemented)
 
-#### String Comparison Operators (Neo4j Expressions Manual)
-- [ ] `STARTS WITH`: `WHERE n.name STARTS WITH 'A'`
-- [ ] `ENDS WITH`: `WHERE n.name ENDS WITH 'son'`
-- [ ] `CONTAINS`: `WHERE n.name CONTAINS 'oh'`
-- [ ] `=~` (regex): `WHERE n.name =~ '.*son$'`
-- [ ] `IS NORMALIZED` / `IS NOT NORMALIZED` - String normalization checks
+## ✅ Recently Implemented (December 2025)
 
-#### List Operators (Neo4j Expressions Manual)
-- [ ] `IN` operator: `WHERE n.prop IN [1, 2, 3]`
-- [ ] `IN` for property existence: `WHERE 'email' IN keys(n)`
+### Pattern Predicates in WHERE Clauses
+- **Status**: ✅ Fully implemented and tested
+- **Examples**:
+  - `WHERE (user)-[:LIKES]->(item)` - Check if relationship exists
+  - `WHERE NOT (user)-[:LIKES]->(item)` - Negative pattern predicate
+- **Use Case**: Recommendation engines, graph filtering
+- **Tests**: `test_where_pattern_predicate`, `test_where_not_pattern`, `test_recommendation_engine_query`
 
-#### Boolean Operators
-- [x] `AND`, `OR`, `NOT` ✅ (implemented)
-- [ ] `XOR` - Exclusive OR operator
+### Expression Operators (Complete)
+- All arithmetic operators: `+`, `-`, `*`, `/`, `%`, `^`
+- String operators: `STARTS WITH`, `ENDS WITH`, `CONTAINS`, `=~`
+- List operations: indexing, slicing, concatenation, comprehensions
+- Map projections and dynamic property access
+- XOR logical operator
 
-#### Mathematical Operators (Neo4j Expressions Manual)
-- [ ] Addition: `+` for numbers
-- [ ] Subtraction: `-`
-- [ ] Multiplication: `*`
-- [ ] Division: `/`
-- [ ] Modulo: `%`
-- [ ] Exponentiation: `^`
-- [ ] Examples:
-  - `WHERE n.age + 5 > 30`
-  - `RETURN n.price * 1.1 AS newPrice`
-  - `RETURN 2 ^ 3 AS result` (returns 8)
+## 🔴 Missing Features (Prioritized)
 
-#### String Operators (Neo4j Expressions Manual)
-- [ ] String concatenation with `+`: `n.firstName + ' ' + n.lastName`
-- [ ] String concatenation with `||`: `n.firstName || ' ' || n.lastName`
-
-#### List Expressions (Neo4j Expressions Manual)
-- [ ] List concatenation with `||`: `list1 || list2`
-- [ ] List concatenation with `+`: `list1 + list2`
-- [ ] List element access: `list[0]`, `list[-1]`
-- [ ] List slicing: `list[1..3]`, `list[1..]`, `list[..3]`
-- [ ] List comprehension: `[x IN list WHERE x > 5 | x * 2]`
-- [ ] Pattern comprehension: `[(n)-->(m) WHERE m.age > 25 | m.name]`
-
-#### Map Expressions (Neo4j Expressions Manual)
-- [x] Map literals: `{key: value}` ✅ (implemented)
-- [ ] Property access with dot: `map.key`
-- [ ] Property access with brackets: `map['key']`
-- [ ] Map projection: `n{.name, .age, computed: n.prop * 2}`
-
-#### Node and Relationship Operators
-- [x] Property access with dot: `n.property` ✅ (implemented)
-- [ ] Property access with brackets: `n['property']`
-- [ ] Dynamic property access: `n[variableKey]`
-
-#### Temporal Operators (Neo4j Expressions Manual)
-- [ ] Date/time arithmetic: `date() + duration({days: 7})`
-- [ ] Duration multiplication: `duration({hours: 1}) * 3`
-- [ ] Temporal subtraction: `date('2024-12-31') - date('2024-01-01')`
-
-### Priority 2: Advanced Pattern Features
-
-#### Shortest Path
-- [ ] `shortestPath()`: `MATCH p = shortestPath((a)-[*]-(b))`
-- [ ] `allShortestPaths()`
-
-#### Named Paths
-- [ ] Path variables: `MATCH p = (a)-[*]-(b)`
-- [ ] Path functions: `length(p)`, `nodes(p)`, `relationships(p)`
-
-#### Pattern Predicates
-- [ ] `WHERE (n)-[:KNOWS]->(m)` - inline relationship check
-
-### Priority 3: Aggregation Functions
-
-Currently we parse function calls but need specific aggregation support:
-- [ ] `sum()`: `RETURN sum(n.amount)`
-- [ ] `avg()`: `RETURN avg(n.age)`
-- [ ] `min()` / `max()`
-- [ ] `collect()`: `RETURN collect(n.name)`
-- [ ] `percentileDisc()` / `percentileCont()`
-- [ ] `stDev()` / `stDevP()`
-
-### Priority 4: CASE Expressions
-
-- [ ] Simple CASE: `CASE n.status WHEN 'active' THEN 1 ELSE 0 END`
-- [ ] Searched CASE: `CASE WHEN n.age > 18 THEN 'adult' ELSE 'minor' END`
-
-### Priority 5: Advanced Clauses
+### Priority 1: Write Operations (HIGH)
 
 #### DELETE
 - [ ] `DELETE` - Delete nodes/relationships
 - [ ] `DETACH DELETE` - Delete node and relationships
+- **Priority**: HIGH - Common write operation
+- **Example**: `MATCH (n:Temp) DELETE n`
 
 #### REMOVE
 - [ ] `REMOVE` - Remove properties or labels
-- [ ] Example: `REMOVE n.property`
-- [ ] Example: `REMOVE n:Label`
+- **Priority**: HIGH - Property/label management
+- **Examples**:
+  - `REMOVE n.property`
+  - `REMOVE n:Label`
 
-#### ORDER BY
-- [ ] `ORDER BY` - Sort results
-- [ ] `ASC` / `DESC`
-- [ ] Multiple sort keys
+#### Standalone SET
+- [ ] `SET` as standalone clause (currently only in MERGE context)
+- **Priority**: HIGH - Property updates
+- **Example**: `MATCH (n) SET n.updated = timestamp()`
 
-#### LIMIT / SKIP (partially supported)
-- [x] `LIMIT` in RETURN (✅ implemented)
-- [x] `SKIP` in RETURN (✅ implemented)
-- [ ] `LIMIT` / `SKIP` in WITH
+### Priority 2: Quantified Path Patterns - Validation (MEDIUM)
 
-#### DISTINCT
-- [ ] `RETURN DISTINCT` - Unique results
-- [ ] `WITH DISTINCT` - Unique intermediate results
+#### QPP Validation
+- [x] AST defined ✅
+- [x] Parser implemented ✅
+- [ ] Validation logic for QPP patterns
+- **Priority**: MEDIUM - Neo4j 5+ feature
+- **Example**: `MATCH (a)-[:KNOWS*1..3]->(b)` needs validation
 
-#### UNION
+### Priority 3: Advanced Path Features (MEDIUM)
+
+#### Shortest Path
+- [ ] `shortestPath()`: `MATCH p = shortestPath((a)-[*]-(b))`
+- [ ] `allShortestPaths()`
+- **Priority**: MEDIUM - Specialized graph algorithms
+
+#### Named Paths
+- [x] Path variables: `MATCH p = (a)-[*]-(b)` ✅ (basic support)
+- [ ] Path functions: `length(p)`, `nodes(p)`, `relationships(p)`
+- **Priority**: MEDIUM - Path analysis
+
+### Priority 4: FOREACH (LOW-MEDIUM)
+
+- [ ] `FOREACH (x IN list | CREATE (n {prop: x}))`
+- **Priority**: LOW-MEDIUM - Iteration patterns
+- **Use Case**: Batch operations
+
+### Priority 5: UNION Queries (LOW)
+
 - [ ] `UNION` - Combine query results
 - [ ] `UNION ALL` - Include duplicates
+- **Priority**: LOW - Advanced query composition
 
-#### FOREACH
-- [ ] `FOREACH (x IN list | CREATE (n {prop: x}))`
-
-### Priority 6: Neo4j 25 Features (Cypher 25 Only)
-
-#### Conditional Queries (WHEN) - New in Neo4j 2025.06
-- [ ] `WHEN` clause for conditional query execution
-- [ ] Branching logic based on criteria
-
-#### Sequential Queries (NEXT) - New in Neo4j 2025.06
-- [ ] `NEXT` clause for linear query composition
-- [ ] Passing return values between sequential queries
-
-### Priority 7: Subquery Expressions
+### Priority 6: Subquery Expressions (LOW)
 
 #### EXISTS Subqueries
 - [ ] `WHERE EXISTS { (n)-[:KNOWS]->(m) }`
-- [ ] Existential pattern matching
+- **Note**: Pattern predicates provide similar functionality
 
-#### COLLECT Subqueries
+#### COLLECT/COUNT Subqueries
 - [ ] `COLLECT { MATCH ... RETURN ... }`
-- [ ] Subquery collection
-
-#### COUNT Subqueries
 - [ ] `COUNT { MATCH ... }`
-- [ ] Subquery counting (different from `count()` function)
+- **Priority**: LOW - Advanced aggregation
 
-### Priority 8: Advanced Path Features (from Basic Queries Manual)
+### Priority 7: Neo4j 5.x+ Features (FUTURE)
 
-#### Quantified Path Patterns (GQL Conformant)
-- [x] Fixed quantifiers: `--{2}--` ✅ (implemented as `*2..2`)
-- [x] Range quantifiers: `--{1,4}--` ✅ (implemented as `*1..4`)
-- [ ] Unbounded quantifiers: `--{1,}--`
-- [ ] Optional quantifier: `--{0,1}--`
+#### SHORTEST Keyword (GQL Conformant)
+- [ ] `ALL SHORTEST`, `ANY SHORTEST`, `SHORTEST N`
+- **Priority**: FUTURE - Replaces `shortestPath()`
 
-#### SHORTEST Keyword (GQL Conformant - replaces shortestPath())
-- [ ] `ALL SHORTEST` paths: `p = ALL SHORTEST (a)--+(b)`
-- [ ] `ANY SHORTEST` path: `p = ANY SHORTEST (a)--+(b)`
-- [ ] `SHORTEST N` paths: `p = SHORTEST 5 (a)--+(b)`
-- [ ] `SHORTEST N GROUPS` paths
+#### Label Expressions
+- [x] Simple labels: `:Label` ✅
+- [x] Multiple labels: `:Label1:Label2` ✅
+- [ ] NOT label: `:!Label`
+- [ ] OR label: `:Label1|Label2`
+- [ ] AND label: `:Label1&Label2`
+- [ ] Wildcard: `:%`
 
-#### Path Pattern Expressions
-- [ ] Path patterns in WHERE: `WHERE (n)-[:KNOWS]->(m)`
-- [ ] Path pattern predicates for filtering
+#### Conditional/Sequential Queries (Neo4j 2025.06)
+- [ ] `WHEN` clause - Conditional execution
+- [ ] `NEXT` clause - Sequential composition
+- **Priority**: FUTURE - Latest Neo4j version only
 
-#### Type Predicate Expressions
-- [ ] `IS :: TYPE` syntax for type checking
-- [ ] Value type verification
+### Priority 8: Schema Commands (ADMIN)
 
-### Priority 9: Label Expressions (from Basic Queries Manual)
+- [ ] `CREATE INDEX` / `DROP INDEX`
+- [ ] `CREATE CONSTRAINT` / `DROP CONSTRAINT`
+- [ ] `SHOW INDEXES` / `SHOW CONSTRAINTS`
+- **Priority**: ADMIN - Database administration
 
-- [x] Simple labels: `:Label` ✅ (implemented)
-- [x] Multiple labels: `:Label1:Label2` ✅ (implemented)
-- [ ] NOT label expression: `:!Label` (seen in Tom Hanks example)
-- [ ] OR label expression: `:Label1|Label2`
-- [ ] AND label expression: `:Label1&Label2`
-- [ ] Wildcard label: `:%` (any label)
-- [ ] Parenthesized expressions: `:(Label1|Label2)`
+### Priority 9: Data Import (SPECIALIZED)
 
-### Priority 10: Advanced Features
-
-#### Indexes and Constraints (Schema Commands)
-- [ ] `CREATE INDEX`
-- [ ] `CREATE CONSTRAINT`
-- [ ] `DROP INDEX`
-- [ ] `DROP CONSTRAINT`
-- [ ] `SHOW INDEXES`
-- [ ] `SHOW CONSTRAINTS`
-
-#### LOAD CSV
 - [ ] `LOAD CSV FROM 'file.csv' AS row`
 - [ ] `LOAD CSV WITH HEADERS`
-- [ ] `FIELDTERMINATOR` option
+- **Priority**: SPECIALIZED - Data import workflows
 
-#### EXPLAIN / PROFILE
-- [ ] `EXPLAIN MATCH ...`
-- [ ] `PROFILE MATCH ...`
+### Priority 10: Query Analysis (UTILITY)
 
-#### Transaction Control
-- [ ] `BEGIN` / `COMMIT` / `ROLLBACK`
-- [ ] Transaction functions
+- [ ] `EXPLAIN` / `PROFILE`
+- **Priority**: UTILITY - Performance analysis
 
-#### SHOW Commands
-- [ ] `SHOW DATABASES`
-- [ ] `SHOW FUNCTIONS`
-- [ ] `SHOW PROCEDURES`
+## Test Coverage by Category
 
-## Test Coverage Recommendations
+### Test Distribution (402 Total Tests)
+- **test_priority1_features.rs**: 52 tests - Advanced features, pattern predicates
+- **test_comprehensive_queries.rs**: 38 tests - Edge cases, CASE expressions
+- **test_agent_queries.rs**: 10 tests - Real-world queries
+- **test_user_query.rs**: 1 test - User query validation
+- **parser/clauses.rs**: 141 tests - Comprehensive parser coverage
+- **validation.rs**: 17 tests - Validation logic
+- **validation_typecheck_tests.rs**: ~100 tests - Type checking (Off/Warnings/Strict)
+- **types.rs**: 4 tests - Type system
+- **errors.rs**: ~39 tests - Error handling
 
-### Phase 1: Expression Operators (High Priority)
-Add comprehensive tests for:
-1. `IN` operator with lists
-2. String matching: `STARTS WITH`, `ENDS WITH`, `CONTAINS`
-3. Arithmetic expressions in WHERE and RETURN
-4. String concatenation
+### Real-World Query Support
+✅ **Recommendation Engine**: Pattern predicates, parameters, aggregation, filtering
+✅ **Graph Analytics**: Complex traversals, property comparisons, list operations
+✅ **Data Manipulation**: CREATE, MERGE, SET with conditional logic
+✅ **Schema Validation**: Labels, relationships, properties, type checking
 
-### Phase 2: Pattern Enhancements
-1. `EXISTS` subqueries
-2. Path variables and functions
-3. `shortestPath` / `allShortestPaths`
+## Next Steps (Prioritized Roadmap)
 
-### Phase 3: Aggregation & Sorting
-1. All aggregation functions
-2. `ORDER BY` with multiple keys
-3. `DISTINCT` in RETURN and WITH
+### Phase 1: Write Operations (Next Sprint)
+1. ✅ **Pattern Predicates** - COMPLETED!
+2. 🎯 **DELETE/DETACH DELETE** - Implement delete operations
+3. 🎯 **REMOVE** - Property and label removal
+4. 🎯 **Standalone SET** - SET clause outside MERGE
 
-### Phase 4: Conditional Logic
-1. `CASE` expressions (simple and searched)
-2. Complex CASE nesting
+### Phase 2: QPP Validation
+1. Add comprehensive QPP validation tests
+2. Implement validation logic for quantified relationships
+3. Test edge cases (unbounded, optional quantifiers)
 
-### Phase 5: Additional Clauses
-1. `DELETE` and `DETACH DELETE`
-2. `REMOVE`
-3. `UNION` / `UNION ALL`
-4. `FOREACH`
+### Phase 3: Advanced Patterns (If Needed)
+1. `shortestPath()` and `allShortestPaths()`
+2. Path functions: `length()`, `nodes()`, `relationships()`
+3. FOREACH clause
 
-## Testing Strategy
+### Phase 4: Query Composition (If Needed)
+1. UNION and UNION ALL
+2. Advanced subquery expressions
+3. Label expression syntax
 
-### Current Test Files
-- `test_comprehensive_queries.rs` - 38 tests covering core patterns
-- `validation_typecheck_tests.rs` - Type checking tests
-- `test_agent_queries.rs` - Real-world agent query tests
-- Unit tests in `clauses.rs` - ~150 tests for individual parsers
+## Performance Benchmarks
 
-### Recommended New Test Files
-1. `test_expressions.rs` - All expression types and operators
-2. `test_aggregations.rs` - Aggregation functions and grouping
-3. `test_advanced_patterns.rs` - Shortest paths, EXISTS, etc.
-4. `test_conditional.rs` - CASE expressions
-5. `test_string_operations.rs` - String matching and manipulation
+- **Current**: 402 tests in 0.01s (excellent performance)
+- **Parser efficiency**: Fast nom-based parser with minimal backtracking
+- **Memory**: Lean AST structure
+- **Target**: Maintain <0.05s for 500+ tests
 
-## Next Steps
+## Success Metrics
 
-1. **Prioritize features** based on agent query patterns
-2. **Create expression parser** for arithmetic/string operations
-3. **Implement IN operator** (high usage in real queries)
-4. **Add string matching operators** (STARTS WITH, CONTAINS, etc.)
-5. **Enhance aggregation support** with specific function validation
-6. **Add CASE expression support**
-
-## Performance Considerations
-
-Current parser is fast (350 tests in 0.01s). Key optimizations:
-- Use `alt()` efficiently for operator precedence
-- Minimize backtracking with clear precedence rules
-- Cache common sub-parsers
-- Keep AST structure lean
+- ✅ **Current**: 402/402 tests (100% pass rate)
+- ✅ **Pattern Predicates**: Fully implemented
+- ✅ **Expression Operators**: Complete coverage
+- 🎯 **Target**: 450+ tests covering write operations
+- 🎯 **Agent query success**: >95% for real-world patterns
+- 🎯 **Parse speed**: <0.05s for 500+ tests
 
 ## Documentation Links
 
@@ -326,11 +272,14 @@ Current parser is fast (350 tests in 0.01s). Key optimizations:
 - [Expressions](https://neo4j.com/docs/cypher-manual/current/expressions/)
 - [Functions](https://neo4j.com/docs/cypher-manual/current/functions/)
 - [Clauses](https://neo4j.com/docs/cypher-manual/current/clauses/)
-- [Advanced Cypher (Medium)](https://medium.com/@pankajwahane/mastering-advanced-cypher-unleashing-the-full-potential-of-neo4j-with-aggregations-counting-and-5f362174c51e)
+- [Pattern Predicates](https://neo4j.com/docs/cypher-manual/current/clauses/where/#where-patterns)
 
-## Success Metrics
+## Recent Accomplishments 🎉
 
-- ✅ Current: 350/350 tests (100%)
-- 🎯 Target: 500+ tests covering all Priority 1-3 features
-- 🎯 Agent query success rate: >95% for real-world patterns
-- 🎯 Parse speed: <0.05s for 500+ tests
+### December 13, 2025
+- ✅ **Pattern Predicates in WHERE**: Full AST, parser, and validation support
+- ✅ **Test Coverage**: Increased from 350 to 402 tests
+- ✅ **Real-World Queries**: Recommendation engine with `WHERE NOT` patterns working
+- ✅ **Expression Operators**: Complete arithmetic, string, list, and map operations
+- ✅ **Parameters**: Full support including in property maps (`{id: $userId}`)
+- ✅ **Type Checking**: Comprehensive validation with severity levels
