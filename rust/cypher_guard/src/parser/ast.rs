@@ -1,6 +1,7 @@
 // Root of the AST
 #[derive(Debug, PartialEq, Clone)]
 pub struct Query {
+    pub use_clause: Option<UseClause>,  // USE must come first if present
     pub match_clauses: Vec<MatchClause>,
     pub merge_clauses: Vec<MergeClause>,
     pub create_clauses: Vec<CreateClause>,
@@ -424,4 +425,18 @@ pub struct LoadCsvClause {
     pub with_headers: bool,                 // true for LOAD CSV WITH HEADERS
     pub field_terminator: Option<String>,   // Custom field separator (FIELDTERMINATOR)
     pub periodic_commit: Option<u64>,       // USING PERIODIC COMMIT (deprecated but still valid)
+}
+
+// USE clause for multi-database routing (Neo4j 4.x+)
+#[derive(Debug, PartialEq, Clone)]
+pub struct UseClause {
+    pub graph_reference: GraphReference,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum GraphReference {
+    Static(String),                        // USE myDatabase
+    ByName(Box<PropertyValue>),           // USE graph.byName('db') or graph.byName($param)
+    ByElementId(Box<PropertyValue>),      // USE graph.byElementId('id')
+    Composite(String, String),            // USE composite.constituent
 }

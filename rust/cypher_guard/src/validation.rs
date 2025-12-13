@@ -1110,6 +1110,7 @@ mod tests {
     #[test]
     fn test_extract_query_elements_basic() {
         let query = Query {
+            use_clause: None,
             match_clauses: vec![MatchClause {
                 elements: vec![MatchElement {
                     path_function: None,
@@ -1148,6 +1149,7 @@ mod tests {
     #[test]
     fn test_extract_query_elements_with_where() {
         let query = Query {
+            use_clause: None,
             match_clauses: vec![MatchClause {
                 elements: vec![MatchElement {
                     path_function: None,
@@ -1198,6 +1200,7 @@ mod tests {
     #[test]
     fn test_extract_query_elements_with_return() {
         let query = Query {
+            use_clause: None,
             match_clauses: vec![MatchClause {
                 elements: vec![MatchElement {
                     path_function: None,
@@ -1249,6 +1252,7 @@ mod tests {
     #[test]
     fn test_extract_query_elements_with_with() {
         let query = Query {
+            use_clause: None,
             match_clauses: vec![MatchClause {
                 elements: vec![MatchElement {
                     path_function: None,
@@ -1302,6 +1306,7 @@ mod tests {
     #[test]
     fn test_extract_query_elements_with_unwind() {
         let query = Query {
+            use_clause: None,
             match_clauses: vec![],
             merge_clauses: vec![],
             create_clauses: vec![],
@@ -1566,6 +1571,7 @@ mod tests {
     #[test]
     fn test_validate_unwind_expression_type() {
         let mut query = Query {
+            use_clause: None,
             match_clauses: vec![],
             merge_clauses: vec![],
             create_clauses: vec![],
@@ -1623,6 +1629,7 @@ mod tests {
 
         // Test valid direction: Person -> Movie (Right direction)
         let valid_query = Query {
+            use_clause: None,
             match_clauses: vec![MatchClause {
                 elements: vec![MatchElement {
                     path_function: None,
@@ -1681,6 +1688,7 @@ mod tests {
 
         // Test invalid direction: Person <- Movie (Left direction, but should be Person -> Movie)
         let invalid_query = Query {
+            use_clause: None,
             match_clauses: vec![MatchClause {
                 elements: vec![MatchElement {
                     path_function: None,
@@ -1786,6 +1794,7 @@ mod tests {
         };
 
         let query = Query {
+            use_clause: None,
             match_clauses: vec![MatchClause {
                 elements: vec![MatchElement {
                     path_function: None,
@@ -1868,6 +1877,7 @@ mod tests {
         };
 
         let query = Query {
+            use_clause: None,
             match_clauses: vec![MatchClause {
                 elements: vec![MatchElement {
                     path_function: None,
@@ -1955,6 +1965,7 @@ mod tests {
         };
 
         let query = Query {
+            use_clause: None,
             match_clauses: vec![MatchClause {
                 elements: vec![MatchElement {
                     path_function: None,
@@ -2033,6 +2044,7 @@ mod tests {
         };
 
         let query = Query {
+            use_clause: None,
             match_clauses: vec![MatchClause {
                 elements: vec![MatchElement {
                     path_function: None,
@@ -2104,6 +2116,7 @@ mod tests {
         };
 
         let query = Query {
+            use_clause: None,
             match_clauses: vec![MatchClause {
                 elements: vec![MatchElement {
                     path_function: None,
@@ -2195,6 +2208,7 @@ mod tests {
         };
 
         let query = Query {
+            use_clause: None,
             match_clauses: vec![MatchClause {
                 elements: vec![MatchElement {
                     path_function: None,

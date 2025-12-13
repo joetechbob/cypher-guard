@@ -10,9 +10,9 @@ use nom::{
 
 use crate::parser::ast::{
     self, CallClause, CreateClause, ForeachClause, ForeachExpression, ForeachUpdateClause,
-    LoadCsvClause, MatchClause, MatchElement, MergeClause, OnCreateClause, OnMatchClause,
+    GraphReference, LoadCsvClause, MatchClause, MatchElement, MergeClause, OnCreateClause, OnMatchClause,
     PropertyValue, Query, ReturnClause, SetClause, UnionQuery, UnwindClause, UnwindExpression,
-    WhereClause, WithClause, WithExpression, WithItem,
+    UseClause, WhereClause, WithClause, WithExpression, WithItem,
 };
 use crate::parser::patterns::*;
 use crate::parser::span::{offset_to_line_column, Spanned};
@@ -21,6 +21,7 @@ use crate::CypherGuardParsingError;
 
 #[derive(Debug, Clone)]
 pub enum Clause {
+    Use(UseClause),
     Match(MatchClause),
     OptionalMatch(MatchClause),
     Merge(MergeClause),
@@ -672,6 +673,7 @@ fn parse_subquery(input: &str) -> IResult<&str, Query> {
 
     // Build the Query struct with separate fields for each clause type
     let mut query = Query {
+        use_clause: None,  // USE not supported in subqueries
         match_clauses: Vec::new(),
         merge_clauses: Vec::new(),
         create_clauses: Vec::new(),
@@ -692,6 +694,13 @@ fn parse_subquery(input: &str) -> IResult<&str, Query> {
     for spanned_clause in clauses.iter() {
         let clause = &spanned_clause.value;
         match clause {
+            Clause::Use(_) => {
+                // USE should have been parsed before the clause loop, should not appear here
+                return Err(nom::Err::Error(nom::error::Error::new(
+                    input,
+                    nom::error::ErrorKind::Tag,
+                )));
+            }
             Clause::Match(match_clause) => query.match_clauses.push(match_clause.clone()),
             Clause::OptionalMatch(match_clause) => query.match_clauses.push(match_clause.clone()),
             Clause::Merge(merge_clause) => query.merge_clauses.push(merge_clause.clone()),
@@ -1470,6 +1479,70 @@ pub fn load_csv_clause(input: &str) -> IResult<&str, LoadCsvClause> {
     }))
 }
 
+// Parses the USE clause for multi-database routing (e.g. USE myDatabase, USE graph.byName('db'))
+pub fn use_clause(input: &str) -> IResult<&str, UseClause> {
+    let (input, _) = multispace0(input)?;
+    let (input, _) = tag_no_case("USE")(input)?;
+    let (input, _) = multispace1(input)?;
+
+    // Try to parse graph.byName(...) or graph.byElementId(...)
+    if let Ok((rest, _)) = tuple::<_, _, nom::error::Error<&str>, _>((
+        tag_no_case("graph"),
+        char('.'),
+    ))(input) {
+        // Parse byName or byElementId
+        if let Ok((rest2, _)) = tag_no_case::<_, _, nom::error::Error<&str>>("byName")(rest) {
+            let (rest3, _) = multispace0(rest2)?;
+            let (rest4, _) = char('(')(rest3)?;
+            let (rest5, _) = multispace0(rest4)?;
+
+            // Parse the argument (string literal or parameter)
+            let (rest6, graph_ref) = alt((
+                map(parameter, |p| GraphReference::ByName(Box::new(PropertyValue::Parameter(p)))),
+                map(parse_string_literal, |s| GraphReference::ByName(Box::new(PropertyValue::String(s)))),
+            ))(rest5)?;
+
+            let (rest7, _) = multispace0(rest6)?;
+            let (rest8, _) = char(')')(rest7)?;
+
+            return Ok((rest8, UseClause { graph_reference: graph_ref }));
+        } else if let Ok((rest2, _)) = tag_no_case::<_, _, nom::error::Error<&str>>("byElementId")(rest) {
+            let (rest3, _) = multispace0(rest2)?;
+            let (rest4, _) = char('(')(rest3)?;
+            let (rest5, _) = multispace0(rest4)?;
+
+            // Parse the argument (string literal or parameter)
+            let (rest6, graph_ref) = alt((
+                map(parameter, |p| GraphReference::ByElementId(Box::new(PropertyValue::Parameter(p)))),
+                map(parse_string_literal, |s| GraphReference::ByElementId(Box::new(PropertyValue::String(s)))),
+            ))(rest5)?;
+
+            let (rest7, _) = multispace0(rest6)?;
+            let (rest8, _) = char(')')(rest7)?;
+
+            return Ok((rest8, UseClause { graph_reference: graph_ref }));
+        }
+    }
+
+    // Try to parse composite database: composite.constituent
+    let (input, first_id) = identifier(input)?;
+    let (input, _) = multispace0(input)?;
+
+    if let Ok((rest, _)) = char::<_, nom::error::Error<&str>>('.')(input) {
+        let (rest2, _) = multispace0(rest)?;
+        let (rest3, second_id) = identifier(rest2)?;
+
+        return Ok((rest3, UseClause {
+            graph_reference: GraphReference::Composite(first_id.to_string(), second_id.to_string())
+        }));
+    }
+
+    // Otherwise it's a simple static database name
+    Ok((input, UseClause {
+        graph_reference: GraphReference::Static(first_id.to_string())
+    }))
+}
+
 // Parses the DELETE or DETACH DELETE clause (e.g. DELETE n, DETACH DELETE n, r)
 pub fn delete_clause(input: &str) -> IResult<&str, ast::DeleteClause> {
     let (input, _) = multispace0(input)?;
@@ -1678,7 +1751,16 @@ pub fn clause(input: &str) -> IResult<&str, Spanned<Clause>> {
 // Parses a complete query (e.g. MATCH (a)-[:KNOWS]->(b) RETURN a, b)
 pub fn parse_query(input: &str) -> IResult<&str, Query> {
     let mut rest = input;
+    let mut use_clause_opt = None;
     let mut clauses = Vec::new();
+
+    // Try to parse optional USE clause first (must come before other clauses)
+    let (r, _) = multispace0(rest)?;
+    rest = r;
+    if let Ok((next_rest, use_c)) = use_clause(rest) {
+        use_clause_opt = Some(use_c);
+        rest = next_rest;
+    }
 
     loop {
         // Always skip leading whitespace before parsing the next clause
@@ -1720,6 +1802,7 @@ pub fn parse_query(input: &str) -> IResult<&str, Query> {
 
     // Convert clauses to Query struct
     let mut query = Query {
+        use_clause: use_clause_opt,
         match_clauses: Vec::new(),
         merge_clauses: Vec::new(),
         create_clauses: Vec::new(),
@@ -1738,6 +1821,10 @@ pub fn parse_query(input: &str) -> IResult<&str, Query> {
 
     for spanned_clause in clauses {
         match spanned_clause.value {
+            Clause::Use(_) => {
+                // USE should have been parsed before the clause loop, ignore if it appears here
+                // This shouldn't happen in normal parsing flow
+            }
             Clause::Match(match_clause) => query.match_clauses.push(match_clause),
             Clause::OptionalMatch(match_clause) => query.match_clauses.push(match_clause),
             Clause::Merge(merge_clause) => query.merge_clauses.push(merge_clause),
@@ -2009,6 +2096,7 @@ enum ClauseOrderState {
 /// Returns a human-readable name for a clause
 fn clause_name(clause: &Clause) -> &'static str {
     match clause {
+        Clause::Use(_) => "USE",
         Clause::Match(_) => "MATCH",
         Clause::OptionalMatch(_) => "OPTIONAL MATCH",
         Clause::Unwind(_) => "UNWIND",
