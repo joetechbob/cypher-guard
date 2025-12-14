@@ -741,10 +741,24 @@ fn extract_property_access_from_string(
         return;
     }
 
+    // Strip AS alias if present (case-insensitive)
+    let expr_only = if let Some(as_pos) = trimmed.to_lowercase().find(" as ") {
+        // Extract just the expression part before " AS "
+        let expr = trimmed[..as_pos].trim();
+        let alias = trimmed[as_pos + 4..].trim(); // Skip " as "
+        // Add the alias as a defined variable if it's in RETURN or WITH context
+        if matches!(context, PropertyContext::Return | PropertyContext::With) && !alias.is_empty() {
+            elements.add_defined_variable(alias.to_string());
+        }
+        expr
+    } else {
+        trimmed
+    };
+
     // Simple pattern matching for property access: variable.property
-    if let Some(dot_pos) = trimmed.find('.') {
-        let variable = trimmed[..dot_pos].trim();
-        let property = trimmed[dot_pos + 1..].trim();
+    if let Some(dot_pos) = expr_only.find('.') {
+        let variable = expr_only[..dot_pos].trim();
+        let property = expr_only[dot_pos + 1..].trim();
 
         if !variable.is_empty() && !property.is_empty() {
             elements.add_variable(variable.to_string());
@@ -757,19 +771,19 @@ fn extract_property_access_from_string(
     } else {
         // Only add as a variable if it looks like a variable reference
         // (not a string literal, number, or other literal)
-        if !trimmed.is_empty()
-            && !trimmed.contains(' ')
-            && !trimmed.chars().all(|c| c.is_ascii_digit())
-            && !trimmed.eq_ignore_ascii_case("true")
-            && !trimmed.eq_ignore_ascii_case("false")
-            && !trimmed.eq_ignore_ascii_case("null")
-            && !trimmed.starts_with('"')
-            && !trimmed.starts_with('\'')
-            && !trimmed.ends_with('"')
-            && !trimmed.ends_with('\'')
+        if !expr_only.is_empty()
+            && !expr_only.contains(' ')
+            && !expr_only.chars().all(|c| c.is_ascii_digit())
+            && !expr_only.eq_ignore_ascii_case("true")
+            && !expr_only.eq_ignore_ascii_case("false")
+            && !expr_only.eq_ignore_ascii_case("null")
+            && !expr_only.starts_with('"')
+            && !expr_only.starts_with('\'')
+            && !expr_only.ends_with('"')
+            && !expr_only.ends_with('\'')
         {
-            println!("DEBUG: Adding variable: {}", trimmed);
-            elements.add_variable(trimmed.to_string());
+            println!("DEBUG: Adding variable: {}", expr_only);
+            elements.add_variable(expr_only.to_string());
         }
     }
 }

@@ -182,16 +182,16 @@ fn path_selector(input: &str) -> IResult<&str, ast::PathSelector> {
 // Parses a return item: expression with optional AS alias
 fn return_item(input: &str) -> IResult<&str, String> {
     let (input, _) = multispace0(input)?;
-    
+
     // Parse an expression
     let (input, expr) = parse_expression(input)?;
-    
+
     // Convert PropertyValue to string representation
     let expr_str = property_value_to_string(&expr);
-    
-    // Check for AS alias
+
+    // Check for AS alias (case-insensitive)
     let (input, alias) = opt(preceded(
-        tuple((multispace0, tag("AS"), multispace1)),
+        tuple((multispace0, tag_no_case("AS"), multispace1)),
         identifier,
     ))(input)?;
 
